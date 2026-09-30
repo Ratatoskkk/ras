@@ -17,7 +17,7 @@ const POLICY_FIELDS = [
   ['size_headroom_percent', 'Size headroom (%)', 'number', 'Slack added to every space check.'],
   ['season_pack_min_missing', 'Pack threshold', 'number', 'Missing episodes before a season pack is preferred.'],
   ['sequential_lead_episodes', 'Next-season lead', 'number', 'Episodes from the end of a season that trigger the next one.'],
-  ['max_search_attempts', 'Max search attempts', 'number', 'Give up on a want after this many tries.'],
+  ['max_search_attempts', 'Misses before daily checks', 'number', 'After the fresh window, slow to daily checks after this many misses.'],
   ['min_seed_days', 'Minimum seed days', 'number', 'Nothing is offered for reclaim until it has seeded this long.'],
   ['min_seed_ratio', 'Or minimum ratio', 'number', '0 disables — time only, which is the safe default.'],
   ['torrent_category', 'qBittorrent category', 'text',
@@ -58,8 +58,8 @@ const INTERVAL_FIELDS = [
 
 const CALENDAR_FIELDS = [
   ['fresh_window_days', 'Fresh window (days)', 'Recent airings get the aggressive poll.'],
-  ['give_up_days_tv', 'Give up: episodes (days)', ''],
-  ['give_up_days_movie', 'Give up: films (days)', ''],
+  ['give_up_days_tv', 'Slow checks: episodes (days)', 'After this many days of searching, check once daily.'],
+  ['give_up_days_movie', 'Slow checks: films (days)', 'After this many days of searching, check once daily.'],
   ['pre_air_lead_hours', 'Search lead (hours)', 'Start looking this long before the air date.'],
   ['max_seasons_back', 'Seasons to look back', '0 means every season.'],
 ];
@@ -172,16 +172,18 @@ export default {
 
 function paint(root) {
   setHTML(root, html`
-    <div class="row" style="position:sticky;top:0;z-index:5">
-      <div class="grow">
+    <div class="settings-savebar">
+      <div class="settings-savebar__location">
         <span class="muted">Behaviour lives in </span>
-        <span class="mono">${paths?.config_file || 'conduit.toml'}</span>
+        <span class="mono settings-savebar__path">${paths?.config_file || 'conduit.toml'}</span>
         <span class="faint" id="save-hint" style="margin-left:10px">
           ${dirty ? 'Unsaved changes' : ''}
         </span>
       </div>
-      <button class="btn btn--ghost btn--sm" data-action="reload">Discard</button>
-      <button class="btn btn--primary" data-action="save">Save settings</button>
+      <div class="settings-savebar__actions">
+        <button class="btn btn--ghost btn--sm" data-action="reload">Discard</button>
+        <button class="btn btn--primary" data-action="save">Save settings</button>
+      </div>
     </div>
 
     ${card('Policy', html`
@@ -213,7 +215,7 @@ function paint(root) {
             window. Anything not listed under <code>resolutions</code> or <code>sources</code> is
             rejected outright.
           </span>
-          <textarea data-action="field" data-field="profiles_json" spellcheck="false"
+          <textarea data-action="field" data-field="profiles_json" aria-label="Profile definitions" spellcheck="false"
                     style="min-height:320px">${JSON.stringify(config.profiles, null, 2)}</textarea>
         </div>
       </div>`,
@@ -303,7 +305,7 @@ function toggle(path, label, checked) {
 
 function indexerBlock(indexer, index) {
   return html`
-    <div class="card" style="box-shadow:none">
+    <section class="indexer-block">
       <div class="card__head">
         <h2>${indexer.name || 'Tracker'}</h2>
         <div class="card__actions">
@@ -324,7 +326,7 @@ function indexerBlock(indexer, index) {
         ${field(`indexers.${index}.score_bonus`, 'Score bonus', 'number', indexer.score_bonus,
                 'Added to every release from this tracker.')}
       </div>
-    </div>`;
+    </section>`;
 }
 
 export { titleCase };

@@ -95,6 +95,11 @@ re-downloaded -- so even a lost database costs you nothing.
 **5. You did not approve it.** Season packs, multi-season grabs and anything
 over the size gate wait for a click.
 
+The approval gates above describe the default policy. Setting
+`auto_approve_below_gb` above zero explicitly bypasses the size and pack gates
+for releases below that size. `require_approval_for_everything` still requires
+a click for every grab.
+
 ### The one real gap
 
 De-duplication is keyed on TMDB ids, so anything **Plex has not matched** is
@@ -421,7 +426,7 @@ Interactive API docs live at `/api/docs` while the server is running.
 | Front end | SvelteKit + npm build step | Plain ES modules, no build |
 | Live updates | 5 s polling *and* a separate SSE stream | One WebSocket, pushed |
 | Access control | Prefix check that let `172.99.x` through | Correct range arithmetic, optional token |
-| Tests | A handful | 267, offline |
+| Tests | A handful | Offline regression suite |
 
 ---
 

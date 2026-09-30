@@ -137,3 +137,4 @@ class TestCoverage:
     def test_complete_series_covers_everything(self) -> None:
         parsed = parse("Breaking.Bad.S01-S05.COMPLETE.1080p.BluRay.x265-GRP")
         assert parsed.covers(4, 9) is True
+        assert parsed.covers(6, 1) is False

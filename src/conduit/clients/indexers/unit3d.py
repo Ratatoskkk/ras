@@ -19,7 +19,7 @@ from typing import Any
 from ...config import IndexerConfig
 from ...domain.models import Release
 from ...logs import get_logger
-from ...util.resilience import PermanentError, RetryPolicy
+from ...util.resilience import PermanentError, RetryPolicy, TransientError
 from ..http import HttpService
 from ..tmdb import CacheProtocol
 from .base import SearchQuery
@@ -32,6 +32,7 @@ CATEGORY_TV = 2
 SEARCH_TTL = 600  # seconds
 EMPTY_TTL = 180   # cache "nothing found" briefly so polling stays cheap
 PER_PAGE = 100
+MAX_SEARCH_PAGES = 100
 ACCOUNT_TIMEOUT = 5.0  # a dashboard panel must never make anyone wait
 TORRENT_FETCH_TIMEOUT = 90.0  # nothing waits on this, and losing it is expensive
 
@@ -145,8 +146,24 @@ class Unit3dIndexer:
             # wire, and nothing unplayable ever reaches the scorer.
             params["alive"] = 1
 
-        payload = await self.http.get_json("/api/torrents/filter", params=params, allow_404=True)
-        return [_slim(item) for item in _rows(payload)]
+        rows: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for page in range(1, MAX_SEARCH_PAGES + 1):
+            params["page"] = page
+            payload = await self.http.get_json("/api/torrents/filter", params=params)
+            page_rows = [_slim(item) for item in _rows(payload)]
+            meta = payload.get("meta")
+            if isinstance(meta, dict) and meta.get("current_page") not in (None, page, str(page)):
+                raise TransientError("UNIT3D returned a mismatched search page")
+            new_rows = [row for row in page_rows if row["id"] not in seen_ids]
+            if page_rows and not new_rows:
+                raise TransientError("UNIT3D repeated a search page")
+            rows.extend(new_rows)
+            seen_ids.update(row["id"] for row in new_rows)
+            links = payload.get("links")
+            if not isinstance(links, dict) or not links.get("next"):
+                return rows
+        raise TransientError("UNIT3D search exceeded the page limit")
 
     # -- account ------------------------------------------------------------
     async def account(self) -> dict[str, Any] | None:
@@ -225,16 +242,21 @@ class Unit3dIndexer:
 def _rows(payload: Any) -> list[dict[str, Any]]:
     """UNIT3D has shipped both ``data: [...]`` and ``data: {data: [...]}``."""
     if not isinstance(payload, dict):
-        return []
+        raise TransientError("UNIT3D returned an unexpected search payload")
     data = payload.get("data")
     if isinstance(data, dict):
         data = data.get("data")
-    return [row for row in (data or []) if isinstance(row, dict)]
+    if not isinstance(data, list) or any(not isinstance(row, dict) for row in data):
+        raise TransientError("UNIT3D returned an unexpected search payload")
+    return data
 
 
 def _slim(item: dict[str, Any]) -> dict[str, Any]:
-    attrs = {k: v for k, v in (item.get("attributes") or {}).items() if k not in _DROP_ATTRS}
-    attrs["id"] = str(item.get("id", attrs.get("id", "")))
+    attributes = item.get("attributes")
+    if not isinstance(attributes, dict) or not item.get("id"):
+        raise TransientError("UNIT3D returned an unexpected search payload")
+    attrs = {k: v for k, v in attributes.items() if k not in _DROP_ATTRS}
+    attrs["id"] = str(item["id"])
     return attrs
 
 

@@ -13,6 +13,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from ...domain.models import Release
 from ...logs import get_logger
+from ...util.resilience import TransientError
 
 log = get_logger("indexer")
 
@@ -81,7 +82,10 @@ class IndexerPool:
             *(indexer.search(query) for indexer in self.indexers), return_exceptions=True
         )
         releases: list[Release] = []
+        succeeded = 0
         for indexer, result in zip(self.indexers, results, strict=True):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
             if isinstance(result, BaseException):
                 log.warning(
                     "indexer search failed",
@@ -89,7 +93,10 @@ class IndexerPool:
                            "err": str(result)},
                 )
                 continue
+            succeeded += 1
             releases.extend(result)
+        if not succeeded:
+            raise TransientError(f"Every tracker failed while searching for {query.describe()}")
         return releases
 
     async def fetch_torrent(self, release: Release) -> bytes | None:

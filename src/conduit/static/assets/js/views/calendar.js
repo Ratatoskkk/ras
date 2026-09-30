@@ -3,6 +3,7 @@ import {
   WANT_STATE_STYLE, card, emptyState, poster, searchOutcome, toast,
 } from '../components.js';
 import { store } from '../store.js';
+import { icon } from '../icons.js';
 import {
   countdown, dayLabel, episodeCode, groupBy, html, posterUrl, relativeTime, setHTML,
 } from '../util.js';
@@ -12,6 +13,7 @@ import {
 let mode = 'month';
 let viewMonth = startOfMonth(new Date());
 let selectedDay = null;
+let routeDay = null;
 // The backlog is deliberately behind a toggle in agenda mode. A library with
 // years of unwatched back catalogue would otherwise bury next week's releases.
 let showBacklog = false;
@@ -25,7 +27,22 @@ export default {
   icon: '◷',
   badge: () => null,
 
+  destroy() {
+    routeDay = null;
+  },
+
   render(root) {
+    const day = location.hash.match(/^#\/calendar\/(\d{4}-\d{2}-\d{2})$/)?.[1] || null;
+    const revealDay = day && day !== routeDay;
+    if (revealDay) {
+      const date = new Date(`${day}T12:00:00`);
+      if (!Number.isNaN(date.getTime())) {
+        viewMonth = startOfMonth(date);
+        selectedDay = day;
+        mode = 'month';
+      }
+    }
+    routeDay = day;
     setHTML(root, html`
       <div class="filters">
         <button class="chip" data-action="cal-mode" data-value="month"
@@ -38,6 +55,12 @@ export default {
       </div>
       ${mode === 'month' ? monthView() : agendaView()}
     `);
+    if (revealDay) {
+      requestAnimationFrame(() => root.querySelector('.cal__detail')?.scrollIntoView({
+        behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        block: 'start',
+      }));
+    }
   },
 
   async onAction(action, target, root) {
@@ -143,8 +166,8 @@ function monthView() {
           <span>${viewMonth.getFullYear()}</span>
         </div>
         <div class="cal__nav">
-          <button class="iconbtn" data-action="cal-prev" aria-label="Previous month">‹</button>
-          <button class="iconbtn" data-action="cal-next" aria-label="Next month">›</button>
+          <button class="iconbtn" data-action="cal-prev" aria-label="Previous month">${icon('chevronLeft')}</button>
+          <button class="iconbtn" data-action="cal-next" aria-label="Next month">${icon('chevronRight')}</button>
         </div>
         <button class="btn btn--sm btn--ghost" data-action="cal-today">Today</button>
         <div class="grow"></div>
@@ -193,7 +216,7 @@ function dayCell(date, index, byDay, todayIso) {
           const url = posterUrl(item.poster_path, 'w92');
           return url
             ? html`<img class="daycell__poster" src="${url}" alt="" loading="lazy" decoding="async">`
-            : html`<span class="daycell__ph" title="${item.title}">▦</span>`;
+            : html`<span class="daycell__ph" title="${item.title}"></span>`;
         })}
         ${items.length > shown.length
           ? html`<span class="daycell__more">+${items.length - shown.length}</span>` : ''}
@@ -298,7 +321,7 @@ function airingRow(item) {
           <button class="btn btn--sm btn--ghost" data-action="seen-through" data-id="${item.media_id}"
                   data-season="${item.season ?? ''}" data-episode="${item.episode ?? ''}"
                   title="Mark this and every earlier episode of the season as watched">
-            Seen ⤒
+            Seen through
           </button>
           <button class="btn btn--sm btn--ghost" data-action="search-media" data-id="${item.media_id}"
                   title="Search trackers for this title now">Search</button>

@@ -235,6 +235,7 @@ def parse(name: str, release: Release | None = None) -> ParsedRelease:
 
     if range_match:
         parsed.season = int(range_match.group("from"))
+        parsed.season_to = int(range_match.group("to"))
         parsed.is_season_pack = True
         parsed.is_complete_series = True
         stop_index = range_match.start()

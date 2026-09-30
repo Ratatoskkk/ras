@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.models import DownloadState, EventLevel, TorrentStatus, WantedState
+from ..domain.models import DownloadState, EventLevel, Release, TorrentStatus, WantedState
+from ..domain.parser import parse_release
 from ..logs import get_logger
 from ..util.text import human_size
 from .context import Conduit
@@ -137,10 +138,9 @@ async def _handle_missing(ctx: Conduit, row: dict[str, Any]) -> None:
         download_id, DownloadState.CANCELLED,
         error=f"not in qBittorrent for over {minutes} minutes",
     )
-    if row.get("wanted_id"):
-        await ctx.repos.wanted.set_state(
-            int(row["wanted_id"]), WantedState.SEARCHING, reason="download was removed"
-        )
+    await ctx.repos.wanted.reopen_for_download(
+        download_id, int(row["wanted_id"]) if row.get("wanted_id") else None
+    )
     await ctx.record(
         "download",
         f"{row['display_title']} has been missing from qBittorrent for over "
@@ -166,8 +166,18 @@ async def _handle_complete(ctx: Conduit, row: dict[str, Any], torrent: TorrentSt
     if media_id:
         season = row.get("season")
         if season is not None:
-            episodes = _episode_span(row)
-            await ctx.repos.wanted.mark_covered(int(media_id), int(season), episodes)
+            if not row.get("wanted_count"):
+                if row.get("is_season_pack"):
+                    from .janitor import _pack_seasons
+
+                    for covered_season in _pack_seasons(row) or {int(season)}:
+                        await ctx.repos.wanted.mark_covered(
+                            int(media_id), covered_season, None
+                        )
+                else:
+                    await ctx.repos.wanted.mark_covered(
+                        int(media_id), int(season), _episode_span(row)
+                    )
         elif row.get("wanted_id"):
             await ctx.repos.wanted.set_state(
                 int(row["wanted_id"]), WantedState.DOWNLOADED, reason="download completed"
@@ -193,15 +203,25 @@ async def _handle_complete(ctx: Conduit, row: dict[str, Any], torrent: TorrentSt
             log.debug("asked Plex to rescan", extra={"sections": ", ".join(sections)})
 
     if row.get("is_season_pack") and row.get("season") is not None and media_id:
-        from .janitor import retire_superseded_episodes
+        from .janitor import _pack_seasons, retire_superseded_episodes
 
-        await retire_superseded_episodes(ctx, int(media_id), int(row["season"]), download_id)
+        seasons = _pack_seasons(row)
+        if seasons:
+            await retire_superseded_episodes(ctx, int(media_id), seasons, download_id)
 
 
 def _episode_span(row: dict[str, Any]) -> list[int] | None:
     """Explicit episode list for a single/multi-episode grab, None for a pack."""
     if row.get("is_season_pack"):
         return None
+    release_name = row.get("release_name") or ""
+    if release_name:
+        parsed = parse_release(Release(
+            indexer=row.get("indexer") or "", indexer_id=str(row.get("indexer_id") or ""),
+            name=release_name, size_bytes=int(row.get("size_bytes") or 0), download_url="",
+        ))
+        if parsed.episodes:
+            return parsed.episodes
     start, end = row.get("episode_from"), row.get("episode_to")
     if start is None:
         return None

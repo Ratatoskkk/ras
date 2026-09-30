@@ -12,11 +12,19 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from datetime import date
 from typing import Any
 
 from ..clients.indexers.base import SearchQuery
 from ..domain import decisions, scoring
-from ..domain.models import DownloadState, EventLevel, Release, WantedState
+from ..domain.models import (
+    DownloadState,
+    EventLevel,
+    ParsedRelease,
+    Rejection,
+    Release,
+    WantedState,
+)
 from ..domain.parser import parse_release
 from ..logs import get_logger
 from ..util.text import episode_code, human_size
@@ -36,8 +44,12 @@ async def run_search(
         log.warning("no indexers configured; skipping search")
         return {"searched": 0, "grabbed": 0}
 
+    await ctx.repos.wanted.promote_due(date.today().isoformat())
     fresh_days = ctx.config.calendar.fresh_window_days if fresh_only else None
-    wants = await ctx.repos.wanted.due_for_search(limit=limit, fresh_days=fresh_days)
+    wants = await ctx.repos.wanted.due_for_search(
+        limit=limit, fresh_days=fresh_days,
+        lead_hours=ctx.config.calendar.pre_air_lead_hours,
+    )
     if not wants:
         return {"searched": 0, "grabbed": 0}
 
@@ -101,7 +113,7 @@ async def search_media_now(ctx: Conduit, media_id: int) -> dict[str, int]:
             }
         )
     known = await ctx.repos.downloads.known_release_keys()
-    grabbed = await _search_media(ctx, media_id, rows, known, force=True)
+    grabbed = await _search_media(ctx, media_id, rows, known)
     return {"searched": len(rows), "grabbed": grabbed}
 
 
@@ -129,12 +141,78 @@ async def preview_media(ctx: Conduit, media_id: int, season: int | None = None) 
         season=season,
     )
     releases = await ctx.indexers.search(query)
-    scored = scoring.rank(releases, profile)
+    outstanding = [
+        row for row in await ctx.repos.wanted.for_media(media_id)
+        if row["state"] in (WantedState.WAITING, WantedState.SEARCHING,
+                            WantedState.UNAVAILABLE)
+    ]
+    season_sizes = (
+        await _known_season_sizes(ctx, media_id, query.tmdb_id)
+        if media["media_type"] == "show" else {}
+    )
+    planned_packs: set[int] = set()
+    if media["media_type"] == "show":
+        missing = [
+            (int(row["season"]), int(row["episode"]))
+            for row in outstanding
+            if row["season"] is not None and row["episode"] is not None
+        ]
+        planned_packs = {
+            int(target.season)
+            for target in decisions.plan_grab_targets(
+                missing, ctx.config.policy, season_sizes=season_sizes
+            )
+            if target.is_pack and target.season is not None
+        }
+        planned_packs.update(
+            int(row["season"]) for row in outstanding
+            if row["season"] is not None and row["episode"] is None
+        )
+    known = await ctx.repos.downloads.known_release_keys()
+    parsed = {release.key: parse_release(release) for release in releases}
+    coverage = {
+        release.key: (
+            outstanding if media["media_type"] == "movie" else [
+                row for row in outstanding
+                if row["season"] is not None
+                and (season is None or row["season"] == season)
+                and parsed[release.key].covers(row["season"], row["episode"])
+            ]
+        )
+        for release in releases
+    }
+    scored = scoring.rank(
+        releases, profile,
+        episode_counts={
+            release.key: _content_episode_count(
+                parsed[release.key], season_sizes, len(coverage[release.key])
+            )
+            for release in releases
+        },
+    )
+    for item in scored:
+        if not decisions.matches_target(
+            item.release, item.parsed,
+            media_type=media["media_type"], tmdb_id=query.tmdb_id,
+            title=media["title"], season=None, episode=None, year=media["year"],
+        ):
+            item.rejections.append(Rejection("match", "does not match this title"))
+        if item.release.key in known:
+            item.rejections.append(Rejection("seen", "already selected, denied or blocked"))
+        if not coverage[item.release.key]:
+            detail = ("title is not currently wanted" if media["media_type"] == "movie"
+                      else "does not cover an outstanding episode")
+            item.rejections.append(Rejection("wanted", detail))
+        if item.parsed.is_complete_series and not planned_packs:
+            item.rejections.append(Rejection("pack", "no season pack is currently planned"))
+        elif (item.parsed.is_season_pack and not item.parsed.is_complete_series
+              and item.parsed.season not in planned_packs):
+            item.rejections.append(Rejection("pack", "single episodes are planned for this season"))
     return {
         "media": {"id": media_id, "title": media["title"], "type": media["media_type"]},
         "profile": profile.name,
         "query": query.describe(),
-        "candidates": [item.summary() for item in scored[:50]],
+        "candidates": [item.summary() for item in scored],
         "total": len(releases),
     }
 
@@ -145,8 +223,6 @@ async def _search_media(
     media_id: int,
     rows: list[dict[str, Any]],
     known: set[tuple[str, str]],
-    *,
-    force: bool = False,
 ) -> int:
     first = rows[0]
     media_type = first["media_type"]
@@ -155,6 +231,10 @@ async def _search_media(
     year = first.get("year")
     profile = ctx.config.profile(first.get("profile")) if first.get("profile") else \
         ctx.config.profile_for(media_type)
+    season_sizes = (
+        await _known_season_sizes(ctx, media_id, str(tmdb_id) if tmdb_id else None)
+        if media_type == "show" else {}
+    )
 
     if media_type == "movie":
         targets = [decisions.GrabTarget(season=None, episode=None, episode_count=1, label=title)]
@@ -169,12 +249,15 @@ async def _search_media(
             (r.get("season"), r.get("episode")): r for r in rows
         }
         if missing:
-            targets = decisions.plan_grab_targets(missing, ctx.config.policy)
+            targets = decisions.plan_grab_targets(
+                missing, ctx.config.policy, season_sizes=season_sizes
+            )
         else:
             targets = [
                 decisions.GrabTarget(
                     season=r.get("season"), episode=None,
-                    episode_count=1, label=f"Season {r.get('season')}",
+                    episode_count=season_sizes.get(r.get("season"), 1),
+                    label=f"Season {r.get('season')}",
                 )
                 for r in rows
                 if r.get("season") is not None
@@ -198,7 +281,7 @@ async def _search_media(
             want_lookup=want_lookup,
             known=known,
             distinct_seasons=distinct_seasons,
-            force=force,
+            season_sizes=season_sizes,
         )
         if found:
             grabbed += 1
@@ -242,8 +325,11 @@ async def _search_target(
     want_lookup: dict,
     known: set[tuple[str, str]],
     distinct_seasons: int,
-    force: bool,
+    season_sizes: dict[int, int],
 ) -> bool:
+    affected = _affected_wants(want_lookup, target)
+    if not await ctx.repos.wanted.claimable([int(row["id"]) for row in affected]):
+        return False
     query = SearchQuery(
         media_type=media_type,
         tmdb_id=tmdb_id,
@@ -253,7 +339,6 @@ async def _search_target(
         episode=target.episode,
     )
     releases = await ctx.indexers.search(query)
-    affected = _affected_wants(want_lookup, target)
 
     if not releases:
         await _record_miss(ctx, media_id, title, target, affected, "no releases on any tracker")
@@ -276,9 +361,10 @@ async def _search_target(
             episode=target.episode,
             year=year,
         )
+        and not (target.episode is not None and
+                 (parsed_map[r.key].is_season_pack or parsed_map[r.key].is_complete_series))
     ]
-    if not force:
-        candidates = [r for r in candidates if r.key not in known]
+    candidates = [r for r in candidates if r.key not in known]
 
     if not candidates:
         await _record_miss(
@@ -290,7 +376,12 @@ async def _search_target(
     scored = scoring.rank(
         candidates,
         profile,
-        episode_counts={r.key: max(target.episode_count, 1) for r in candidates},
+        episode_counts={
+            r.key: _content_episode_count(
+                parsed_map[r.key], season_sizes, target.episode_count
+            )
+            for r in candidates
+        },
     )
     winner = scoring.best(scored, profile)
     if winner is None:
@@ -299,19 +390,27 @@ async def _search_target(
         )
         return False
 
-    await _create_download(
+    covered = (
+        affected if media_type == "movie" else [
+            row for (season, episode), row in want_lookup.items()
+            if season is not None and winner.parsed.covers(season, episode)
+        ]
+    )
+
+    created = await _create_download(
         ctx,
         media_id=media_id,
         media_title=title,
         winner=winner,
         target=target,
-        affected=affected,
+        affected=covered,
         distinct_seasons=distinct_seasons,
         profile_name=profile.name,
         alternatives=[s.summary() for s in scored[:8]],
     )
-    known.add(winner.release.key)
-    return True
+    if created:
+        known.add(winner.release.key)
+    return created
 
 
 def _affected_wants(want_lookup: dict, target: decisions.GrabTarget) -> list[dict[str, Any]]:
@@ -328,6 +427,35 @@ def _affected_wants(want_lookup: dict, target: decisions.GrabTarget) -> list[dic
     ]
 
 
+async def _known_season_sizes(
+    ctx: Conduit, media_id: int, tmdb_id: str | None
+) -> dict[int, int]:
+    keys = {
+        (int(row["season"]), int(row["episode"]))
+        for row in await ctx.repos.wanted.for_media(media_id)
+        if row["season"] is not None and row["episode"] is not None
+    }
+    if tmdb_id:
+        keys.update(await ctx.repos.library.have_episodes(tmdb_id))
+    episodes: dict[int, set[int]] = defaultdict(set)
+    for season, episode in keys:
+        episodes[season].add(episode)
+    return {
+        season: max(len(numbers), max(numbers))
+        for season, numbers in episodes.items()
+    }
+
+
+def _content_episode_count(
+    parsed: ParsedRelease, season_sizes: dict[int, int], fallback: int
+) -> int:
+    if parsed.is_complete_series:
+        return max(sum(season_sizes.values()), fallback, 1)
+    if parsed.is_season_pack and parsed.season is not None:
+        return max(season_sizes.get(parsed.season, 0), fallback, 1)
+    return max(len(parsed.episodes), fallback, 1)
+
+
 async def _create_download(
     ctx: Conduit,
     *,
@@ -339,7 +467,7 @@ async def _create_download(
     distinct_seasons: int,
     profile_name: str,
     alternatives: list[dict[str, Any]],
-) -> None:
+) -> bool:
     release: Release = winner.release
     parsed = winner.parsed
     policy = ctx.config.policy
@@ -348,40 +476,47 @@ async def _create_download(
         parsed, float(release.size_bytes), policy, distinct_seasons=distinct_seasons
     )
     state = DownloadState.PENDING_APPROVAL if approval.required else DownloadState.QUEUED
-    display = decisions.display_title(media_title, parsed, target)
-
-    existing = await ctx.repos.downloads.by_release(release.indexer, release.indexer_id)
-    if existing:
-        return
-
-    download_id = await ctx.repos.downloads.create(
-        media_id=media_id,
-        wanted_id=int(affected[0]["id"]) if affected else None,
-        display_title=display,
-        release_name=release.name,
-        indexer=release.indexer,
-        indexer_id=release.indexer_id,
-        download_url=release.download_url,
-        size_bytes=float(release.size_bytes),
-        season=target.season if target.season is not None else parsed.season,
-        episode_from=parsed.episode_from if not target.is_pack else None,
-        episode_to=parsed.episode_to if not target.is_pack else None,
-        is_season_pack=parsed.is_season_pack or target.is_pack,
-        resolution=parsed.resolution,
-        source=parsed.source,
-        dynamic_range=parsed.dynamic_range,
-        video_codec=parsed.video_codec,
-        audio=parsed.audio,
-        release_group=parsed.release_group,
-        score=winner.score,
-        seeders=release.seeders,
-        state=state,
+    display = decisions.display_title(
+        media_title, parsed, None if len(parsed.episodes) > 1 else target
     )
 
-    for row in affected:
-        await ctx.repos.wanted.set_state(
-            int(row["id"]), WantedState.GRABBED, reason=f"grabbed #{download_id}"
+    async with ctx.download_decision_lock:
+        wanted_ids = [int(row["id"]) for row in affected]
+        if not await ctx.repos.wanted.claimable(wanted_ids):
+            return False
+        existing = await ctx.repos.downloads.by_release(release.indexer, release.indexer_id)
+        if existing:
+            return False
+
+        download_id = await ctx.repos.downloads.create(
+            media_id=media_id,
+            wanted_id=wanted_ids[0],
+            display_title=display,
+            release_name=release.name,
+            indexer=release.indexer,
+            indexer_id=release.indexer_id,
+            download_url=release.download_url,
+            size_bytes=float(release.size_bytes),
+            season=target.season if target.season is not None else parsed.season,
+            episode_from=parsed.episode_from if not target.is_pack else None,
+            episode_to=parsed.episode_to if not target.is_pack else None,
+            is_season_pack=parsed.is_season_pack or target.is_pack,
+            resolution=parsed.resolution,
+            source=parsed.source,
+            dynamic_range=parsed.dynamic_range,
+            video_codec=parsed.video_codec,
+            audio=parsed.audio,
+            release_group=parsed.release_group,
+            score=winner.score,
+            seeders=release.seeders,
+            state=state,
+            wanted_count=len(wanted_ids),
         )
+
+        for wanted_id in wanted_ids:
+            await ctx.repos.wanted.set_state(
+                wanted_id, WantedState.GRABBED, reason=f"grabbed #{download_id}"
+            )
 
     detail = (
         f"{parsed.resolution or '?'} {parsed.source or '?'} "
@@ -420,6 +555,7 @@ async def _create_download(
         extra={"title": display, "release": release.name[:90], "score": winner.score,
                "state": str(state)},
     )
+    return True
 
 
 async def _record_miss(
@@ -430,10 +566,11 @@ async def _record_miss(
     affected: list[dict[str, Any]],
     reason: str,
 ) -> None:
+    changed = 0
     for row in affected:
-        await ctx.repos.wanted.set_state(
-            int(row["id"]), WantedState.SEARCHING, reason=reason, bump_attempt=True
-        )
+        changed += await ctx.repos.wanted.record_search_miss(int(row["id"]), reason)
+    if not changed:
+        return
     label = f"{title} {target.label}".strip()
     log.debug("nothing grabbed", extra={"title": label, "reason": reason})
     await ctx.record(

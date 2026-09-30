@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import {
   card, closeModal, emptyState, openModal, poster, progressBar, searchOutcome, toast,
 } from '../components.js';
+import { icon } from '../icons.js';
 import { store } from '../store.js';
 import { bytes, html, relativeTime, setHTML, titleCase } from '../util.js';
 
@@ -9,6 +10,9 @@ let rows = null;
 let cleanup = null;
 let tab = 'monitored';
 let query = '';
+let preview = null;
+let previewTitle = '';
+const PREVIEW_PAGE_SIZE = 50;
 
 export default {
   id: 'library',
@@ -56,6 +60,9 @@ export default {
       }
       case 'preview':
         await showPreview(id, target.dataset.title);
+        return true;
+      case 'preview-page':
+        paintPreview(Number(target.dataset.page));
         return true;
       case 'seen-all': {
         const title = target.dataset.title;
@@ -154,7 +161,7 @@ function paint(root) {
         Reclaim space <span class="faint">${bytes(reclaimable)}</span>
       </button>
       <div class="grow"></div>
-      <input type="search" placeholder="Search titles…" data-action="search" value="${query}"
+      <input type="search" placeholder="Search titles…" aria-label="Search library titles" data-action="search" value="${query}"
              style="max-width:240px">
       <button class="btn btn--sm btn--ghost" data-action="clear-ignored"
               title="Un-ignore every title and bring its episodes back into play">
@@ -180,7 +187,7 @@ function mediaPanel() {
   return card(`${items.length} title${items.length === 1 ? '' : 's'}`, html`
     <div class="list">
       ${items.map((row) => html`
-        <div class="item">
+        <div class="item library-item">
           ${poster(row.poster_path, row.title)}
           <div class="grow">
             <div class="item__title trunc">
@@ -213,12 +220,14 @@ function mediaPanel() {
                       title="Mark everything outstanding for this title as already watched">
                 Seen all
               </button>
-              <button class="btn btn--sm btn--ghost" data-action="refresh-media" data-id="${row.id}">↻</button>
+              <button class="btn btn--sm btn--ghost" data-action="refresh-media" data-id="${row.id}"
+                      aria-label="Refresh ${row.title}" title="Refresh ${row.title} from TMDB">${icon('refresh')}</button>
               <button class="btn btn--sm btn--ghost" data-action="toggle-monitor" data-id="${row.id}"
                       data-ignored="${Boolean(row.ignored)}">
                 ${row.ignored ? 'Follow' : 'Ignore'}
               </button>
-              <button class="btn btn--sm btn--danger" data-action="unfollow" data-id="${row.id}">✕</button>
+              <button class="btn btn--sm btn--danger" data-action="unfollow" data-id="${row.id}"
+                      aria-label="Unfollow ${row.title}" title="Unfollow ${row.title}">${icon('close')}</button>
             </div>
           </div>
         </div>`)}
@@ -282,13 +291,23 @@ function reclaimRow(row, ready) {
 
 async function showPreview(mediaId, title) {
   openModal(`Releases for ${title}`, html`<div class="empty">Querying trackers…</div>`);
-  let data;
   try {
-    data = await api.previewMedia(mediaId);
+    preview = await api.previewMedia(mediaId);
   } catch (error) {
     openModal(`Releases for ${title}`, html`<div class="empty">${error.message}</div>`);
     return;
   }
+  previewTitle = title;
+  paintPreview(0);
+}
+
+function paintPreview(page) {
+  if (!preview) return;
+  const data = preview;
+  const pages = Math.max(1, Math.ceil(data.candidates.length / PREVIEW_PAGE_SIZE));
+  const currentPage = Math.max(0, Math.min(page, pages - 1));
+  const start = currentPage * PREVIEW_PAGE_SIZE;
+  const visible = data.candidates.slice(start, start + PREVIEW_PAGE_SIZE);
 
   const body = html`
     <p class="muted" style="margin-top:0">
@@ -296,8 +315,9 @@ async function showPreview(mediaId, title) {
       <strong>${data.profile}</strong> profile. Rejected entries show the exact rule that
       excluded them.
     </p>
-    ${data.candidates.length
-      ? data.candidates.map((c) => html`
+    ${pages > 1 ? html`<p class="muted">Showing ${start + 1}–${start + visible.length} of ${data.total}</p>` : ''}
+    ${visible.length
+      ? visible.map((c) => html`
           <div class="candidate ${c.accepted ? '' : 'candidate--rejected'}">
             <div class="row">
               <span class="score">${c.accepted ? c.score : '—'}</span>
@@ -323,8 +343,16 @@ async function showPreview(mediaId, title) {
             </div>
           </div>`)
       : emptyState('∅', 'The trackers returned nothing for this title')}
+    ${pages > 1 ? html`
+      <div class="row" style="justify-content:space-between;margin-top:16px">
+        <button class="btn btn--sm btn--ghost" data-action="preview-page"
+                data-page="${currentPage - 1}" ${currentPage === 0 ? 'disabled' : ''}>Previous</button>
+        <span class="muted">Page ${currentPage + 1} of ${pages}</span>
+        <button class="btn btn--sm btn--ghost" data-action="preview-page"
+                data-page="${currentPage + 1}" ${currentPage === pages - 1 ? 'disabled' : ''}>Next</button>
+      </div>` : ''}
   `;
-  openModal(`Releases for ${title}`, body);
+  openModal(`Releases for ${previewTitle}`, body);
 }
 
 export { closeModal };

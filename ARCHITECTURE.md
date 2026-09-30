@@ -268,12 +268,16 @@ waiting --(air date passes)--> searching --(release found)--> grabbed
                         (searched repeatedly,                    v
                          nothing found)                     downloaded
                                    v
-                              unavailable
+                         unavailable (daily search)
 ```
 
-Retirement runs from **when we started looking**, not from the air date. The
-distinction matters: dating it from the air date would write off the entire
-back catalogue of a newly followed series before a single search ran.
+Slow polling begins from **when we started looking**, not from the air date. The
+distinction matters: dating it from the air date would slow the entire back
+catalogue of a newly followed series before a single search ran.
+The attempt limit applies after the fresh-release window. An `unavailable`
+title gets a daily check indefinitely while it remains wanted; a manual search
+can check it immediately. Known future air dates keep a title waiting until
+the date arrives.
 
 ### Deciding how far back to reach
 
@@ -310,6 +314,9 @@ For a series with missing episodes:
 5. Gate on approval: everything, or over the size threshold, or a season pack,
    a multi-season grab, or a complete-series pack.
 
+`auto_approve_below_gb` is an explicit override of the size and pack gates for
+smaller releases; `require_approval_for_everything` takes precedence over it.
+
 Approvals are grouped by title in the UI, so a five-season backfill is one
 card with *Approve all*, not five prompts.
 
@@ -317,7 +324,7 @@ card with *Approve all*, not five prompts.
 
 ## Testing
 
-267 tests, no network, ~30 seconds.
+The offline test suite runs without network access in about 30 seconds.
 
 - **Domain** -- parser, scoring and decisions as plain function calls. Every
   release name in the parser tests is a real one taken from a live tracker or

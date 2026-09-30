@@ -306,7 +306,7 @@ class Intervals(BaseModel):
 
 
 class CalendarConfig(BaseModel):
-    """How aggressively to chase unreleased media."""
+    """When to start searching and when to slow repeated misses."""
 
     fresh_window_days: int = 7
     give_up_days_tv: int = 45

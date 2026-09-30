@@ -9,7 +9,7 @@ removed items before knowing whether it had found anything.
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, date
 
 from ..domain.models import MediaType, WantedState
 from ..logs import get_logger
@@ -34,6 +34,10 @@ async def sync_watchlist(ctx: Conduit) -> dict[str, int]:
     for entry in entries:
         try:
             media_id = await _ingest(ctx, entry)
+        except ValueError as exc:
+            failed += 1
+            log.warning("watchlist item is not ready", extra={"title": entry.title, "err": str(exc)})
+            continue
         except Exception as exc:
             failed += 1
             log.exception("watchlist item failed", extra={"title": entry.title})
@@ -127,10 +131,10 @@ async def _ingest(ctx: Conduit, entry) -> int | None:
     else:
         # A whole series: the calendar task expands it into episodes on its
         # next pass, and we nudge it so that happens now rather than in an hour.
-        await ctx.record("watchlist", f"Now following {title}", media_id=media_id)
         from .calendar import refresh_media  # local import avoids a cycle
 
-        await refresh_media(ctx, await ctx.repos.media.get(media_id))
+        await refresh_media(ctx, await ctx.repos.media.get(media_id), require_details=True)
+        await ctx.record("watchlist", f"Now following {title}", media_id=media_id)
         return media_id
 
     return media_id
@@ -138,20 +142,25 @@ async def _ingest(ctx: Conduit, entry) -> int | None:
 
 async def _want_movie(ctx: Conduit, media_id: int, tmdb_id: str | None, title: str) -> None:
     if tmdb_id and await ctx.repos.library.has_movie(tmdb_id):
-        await ctx.repos.wanted.upsert(
+        wanted_id = await ctx.repos.wanted.upsert(
             media_id=media_id, season=None, episode=None, title=title,
             state=WantedState.DOWNLOADED,
         )
+        await ctx.repos.wanted.set_state(wanted_id, WantedState.DOWNLOADED,
+                                         reason="present in library")
         await ctx.record("watchlist", f"{title} is already in your library", media_id=media_id)
         return
 
     air_date = None
-    label = "unknown"
+    found = None
     if tmdb_id and ctx.tmdb:
-        found, label = await ctx.tmdb.movie_release_date(tmdb_id)
+        found, _ = await ctx.tmdb.movie_release_date(tmdb_id)
         air_date = found.isoformat() if found else None
 
-    state = WantedState.SEARCHING if label == "home" or air_date is None else WantedState.WAITING
+    state = (
+        WantedState.SEARCHING if found is None or found <= date.today()
+        else WantedState.WAITING
+    )
     await ctx.repos.wanted.upsert(
         media_id=media_id, season=None, episode=None, title=title,
         air_date=air_date, state=state,

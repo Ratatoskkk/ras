@@ -6,8 +6,8 @@ Responsibilities:
   has and (optionally) seasons the user has fully watched;
 * keep movie release dates current, preferring digital/physical over
   theatrical, because a theatrical date says nothing about when a rip exists;
-* promote wants from *waiting* to *searching* the moment they air, and retire
-  the ones that were never going to appear.
+* promote wants from *waiting* to *searching* the moment they air, then slow
+  repeated misses to daily searches.
 """
 
 from __future__ import annotations
@@ -46,17 +46,21 @@ async def refresh_calendar(ctx: Conduit) -> dict[str, int]:
     return await _promote_and_expire(ctx, summary)
 
 
-async def refresh_media(ctx: Conduit, row) -> int:
+async def refresh_media(ctx: Conduit, row, *, require_details: bool = False) -> int:
     """Recompute what a single title still needs. Returns wants created."""
     if row is None or ctx.tmdb is None:
+        if require_details:
+            raise ValueError("TMDB is unavailable for this watchlist title")
         return 0
     tmdb_id = row.get("tmdb_id")
     if not tmdb_id:
+        if require_details:
+            raise ValueError("No TMDB match for this watchlist title")
         return 0
 
     if row["media_type"] == "movie":
         return await _refresh_movie(ctx, row, str(tmdb_id))
-    return await _refresh_show(ctx, row, str(tmdb_id))
+    return await _refresh_show(ctx, row, str(tmdb_id), require_details=require_details)
 
 
 # ---------------------------------------------------------------------------
@@ -64,18 +68,19 @@ async def _refresh_movie(ctx: Conduit, row, tmdb_id: str) -> int:
     media_id = int(row["id"])
     library_row = await ctx.repos.library.has_movie(tmdb_id)
     if library_row:
-        await ctx.repos.wanted.upsert(
+        wanted_id = await ctx.repos.wanted.upsert(
             media_id=media_id, season=None, episode=None, title=row["title"],
             state=WantedState.DOWNLOADED,
         )
+        await ctx.repos.wanted.set_state(wanted_id, WantedState.DOWNLOADED,
+                                         reason="present in library")
         return 0
 
-    found, label = await ctx.tmdb.movie_release_date(tmdb_id)
+    found, _ = await ctx.tmdb.movie_release_date(tmdb_id)
     air_date = found.isoformat() if found else None
-    # Only a home-video date means a release can realistically exist.
     state = (
         WantedState.SEARCHING
-        if label == "home" or air_date is None or (found and found <= date.today())
+        if found is None or found <= date.today()
         else WantedState.WAITING
     )
     await ctx.repos.wanted.upsert(
@@ -85,12 +90,16 @@ async def _refresh_movie(ctx: Conduit, row, tmdb_id: str) -> int:
     return 1
 
 
-async def _refresh_show(ctx: Conduit, row, tmdb_id: str) -> int:
+async def _refresh_show(
+    ctx: Conduit, row, tmdb_id: str, *, require_details: bool = False
+) -> int:
     media_id = int(row["id"])
     config = ctx.config
 
     details = await ctx.tmdb.show_with_seasons(tmdb_id)
     if not details:
+        if require_details:
+            raise ValueError(f"TMDB has no episode data for {row['title']}")
         return 0
 
     if details.get("status") and details.get("status") != row.get("tmdb_status"):
@@ -107,7 +116,9 @@ async def _refresh_show(ctx: Conduit, row, tmdb_id: str) -> int:
             number = int(key.split("/", 1)[1])
             seasons[number] = value.get("episodes") or []
 
-    if not seasons:
+    if not seasons or not any(seasons.values()):
+        if require_details:
+            raise ValueError(f"TMDB has no episodes for {row['title']}")
         return 0
 
     have = await ctx.repos.library.have_episodes(tmdb_id)
@@ -166,18 +177,19 @@ async def _promote_and_expire(ctx: Conduit, summary: dict[str, int]) -> dict[str
     config = ctx.config
     today = date.today().isoformat()
     promoted = await ctx.repos.wanted.promote_due(today)
-    expired = await ctx.repos.wanted.expire_stale(
+    slowed = await ctx.repos.wanted.expire_stale(
         config.calendar.give_up_days_tv,
         config.calendar.give_up_days_movie,
         max_attempts=config.policy.max_search_attempts,
+        fresh_days=config.calendar.fresh_window_days,
     )
     await ctx.db.set_meta("calendar_refreshed_at", datetime.now(UTC).isoformat())
 
     if promoted:
         log.info("wants became searchable", extra={"count": promoted})
-    if expired:
-        log.info("wants retired after the give-up window", extra={"count": expired})
+    if slowed:
+        log.info("wants switched to daily search", extra={"count": slowed})
 
-    summary.update({"promoted": promoted, "expired": expired})
+    summary.update({"promoted": promoted, "expired": slowed})
     ctx.bus.publish("calendar.refreshed", **summary)
     return summary

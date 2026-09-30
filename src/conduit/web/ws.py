@@ -47,12 +47,20 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         reader = asyncio.create_task(_drain(websocket))
         try:
             while True:
+                if not subscription.active:
+                    await websocket.close(code=1013, reason="Update stream fell behind")
+                    return
                 try:
                     message = await asyncio.wait_for(
                         subscription.queue.get(), timeout=IDLE_PING_SECONDS
                     )
                 except TimeoutError:
+                    if not subscription.active:
+                        continue
                     await websocket.send_json({"topic": "ping"})
+                    continue
+
+                if not subscription.active:
                     continue
 
                 # A single search pass can publish dozens of events at once.

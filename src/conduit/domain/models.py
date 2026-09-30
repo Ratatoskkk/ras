@@ -18,7 +18,7 @@ class WantedState(StrEnum):
     SEARCHING = "searching"      # released, actively polling indexers
     GRABBED = "grabbed"          # a release was sent to the client
     DOWNLOADED = "downloaded"    # present in the library
-    UNAVAILABLE = "unavailable"  # searched long enough, gave up
+    UNAVAILABLE = "unavailable"
     IGNORED = "ignored"          # stood down by a policy; revived if it changes
     # "I have already seen this." Deliberately distinct from IGNORED: a policy
     # stand-down is reversible and gets revived when the rules widen, whereas
@@ -94,6 +94,7 @@ class ParsedRelease:
     title: str = ""
     year: int | None = None
     season: int | None = None
+    season_to: int | None = None
     episodes: list[int] = field(default_factory=list)
     resolution: str | None = None
     source: str | None = None
@@ -126,6 +127,8 @@ class ParsedRelease:
 
     def covers(self, season: int, episode: int | None) -> bool:
         """Does this release satisfy a specific season/episode want?"""
+        if self.season_to is not None and self.season is not None:
+            return min(self.season, self.season_to) <= season <= max(self.season, self.season_to)
         if self.is_complete_series:
             return True
         if self.season != season:

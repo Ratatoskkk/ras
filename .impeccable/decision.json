@@ -1,0 +1,162 @@
+{
+  "title": "Choose the new rás visual direction",
+  "question": "Which visual world should guide the household control room? All options keep the current workflows and make upcoming releases prominent.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Cinema showtime lightbox",
+      "kicker": "THE ROLL",
+      "lineage": "Cinema foyer showtime panels and changeable film listings",
+      "thesis": "The household sees its next releases as a living showtime schedule.",
+      "palette": ["#101d21", "#e9e1cd", "#e0ad60", "#92afb0"],
+      "materials": ["matte theatre wall", "backlit ivory listings", "printed poster inserts"],
+      "viewport": "A broad upcoming schedule leads, with one large next release and a dated run beside it; decisions and live operations follow below.",
+      "risk": "The cinema reference can become decorative if controls stop reading like practical software.",
+      "raised": [
+        {"from": "industrial quote grammar", "raise": "Every zone gets an unambiguous literal label, with no theatrical euphemism for its action."},
+        {"from": "iridescent cloud edge", "raise": "Color stays confined to dates and state, so poster artwork keeps its own identity."},
+        {"from": "labanotation", "raise": "Time has a consistent axis across calendar, queue, and activity."},
+        {"from": "anime crisis wall", "raise": "An actual failure can interrupt the quiet hierarchy at full scale."},
+        {"from": "depot blind", "raise": "Status changes are discrete and legible without implying that a waiting approval is a fault."}
+      ],
+      "wireframe": {"cols": 12, "rows": 10, "regions": [
+        {"label": "navigation", "x": 0, "y": 0, "w": 2, "h": 10},
+        {"label": "upcoming feature", "x": 2, "y": 0, "w": 6, "h": 5, "accent": true},
+        {"label": "dated run", "x": 8, "y": 0, "w": 4, "h": 5},
+        {"label": "ready shelf", "x": 2, "y": 5, "w": 6, "h": 5},
+        {"label": "system state", "x": 8, "y": 5, "w": 4, "h": 5}
+      ]},
+      "comp": ".impeccable/mocks/decision/assigned.webp"
+    },
+    {
+      "id": "model-pick",
+      "label": "Electronic programme guide",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "Television's grid of channels, times, and current programmes",
+      "thesis": "Every title has a place on a clear time axis, from next airing to available now.",
+      "palette": ["#11242b", "#eef2ed", "#8bc9ba", "#d7b46c"],
+      "materials": ["broadcast grid", "flat programme bands", "poster stills"],
+      "viewport": "A horizontal week band highlights the next releases; the active household decision sits in a separate lower lane.",
+      "risk": "This familiar media pattern can feel like another streaming app if the grid becomes too busy.",
+      "wireframe": {"cols": 12, "rows": 10, "regions": [
+        {"label": "navigation", "x": 0, "y": 0, "w": 2, "h": 10},
+        {"label": "week guide", "x": 2, "y": 0, "w": 10, "h": 5, "accent": true},
+        {"label": "decisions", "x": 2, "y": 5, "w": 6, "h": 5},
+        {"label": "operations", "x": 8, "y": 5, "w": 4, "h": 5}
+      ]},
+      "comp": ".impeccable/mocks/decision/model-pick.webp"
+    },
+    {
+      "id": "challenger-seven-segment",
+      "label": "Seven segment instrument",
+      "verdict": "competitive",
+      "lineage": "Bedside clocks, scoreboards, and equipment displays",
+      "thesis": "Time and progress become unmistakable instrument readings.",
+      "palette": ["#101310", "#e9e3c9", "#e7a75a", "#85b598"],
+      "materials": ["matte instrument fascia", "lit cells", "ghost segments"],
+      "viewport": "An oversized date and countdown anchor the next release; scheduled titles occupy fixed instrument cells.",
+      "case": "Glanceable timing is strong, but the household's film posters and decisions need more human space.",
+      "risk": "If every label becomes a display cell, a useful dashboard starts to resemble a clock demo.",
+      "wireframe": {"cols": 12, "rows": 10, "regions": [
+        {"label": "navigation", "x": 0, "y": 0, "w": 2, "h": 10},
+        {"label": "next date", "x": 2, "y": 0, "w": 6, "h": 5, "accent": true},
+        {"label": "scheduled cells", "x": 8, "y": 0, "w": 4, "h": 5},
+        {"label": "downloads and approvals", "x": 2, "y": 5, "w": 10, "h": 5}
+      ]},
+      "comp": ".impeccable/mocks/decision/challenger-seven-segment.webp",
+      "board": "https://impeccable.style/worlds/cards/signals-instruments-seven-segment-alarm-clock.webp",
+      "hero": "https://impeccable.style/worlds/cards/signals-instruments-seven-segment-alarm-clock-hero.webp"
+    },
+    {
+      "id": "challenger-industrial",
+      "label": "Industrial quoted labels",
+      "verdict": "declined",
+      "lineage": "Industrial streetwear stockroom labeling",
+      "thesis": "Every action carries a blunt, legible tag.",
+      "palette": ["#f5f3ed", "#101010", "#ed701f"],
+      "materials": ["cotton white", "black nylon", "orange tags"],
+      "viewport": "Large labeled courses put the next release under a stark marker.",
+      "case": "Literal labels help clarity, but the stockroom does not identify the household's media experience.",
+      "risk": "Hazard language may turn a welcome upcoming release into a warning.",
+      "kept": "Literal labels for every zone and action.",
+      "wireframe": {"cols": 12, "rows": 10, "regions": [{"label": "label", "x": 0, "y": 0, "w": 12, "h": 3, "accent": true}, {"label": "courses", "x": 0, "y": 3, "w": 12, "h": 7}]},
+      "comp": ".impeccable/mocks/decision/challenger-industrial.webp",
+      "board": "https://impeccable.style/worlds/cards/textiles-weave-drape-fashion-industrial-quote-grammar.webp"
+    },
+    {
+      "id": "challenger-cloud",
+      "label": "Iridescent edge",
+      "verdict": "declined",
+      "lineage": "A narrow color fringe at a cloud edge",
+      "thesis": "A restrained band marks the next moment.",
+      "palette": ["#f8faf9", "#34444a", "#bbd8cb", "#c9a7c4"],
+      "materials": ["white field", "spectral fringe"],
+      "viewport": "A quiet upcoming list lets date color appear only at the active edge.",
+      "case": "Its calmness is useful, but the cloud form hides the media and decision model.",
+      "risk": "It can become atmosphere without giving titles or actions clearer structure.",
+      "kept": "Restraint in where color appears.",
+      "wireframe": {"cols": 12, "rows": 10, "regions": [{"label": "quiet list", "x": 0, "y": 0, "w": 12, "h": 10, "accent": true}]},
+      "comp": ".impeccable/mocks/decision/challenger-cloud.webp"
+    },
+    {
+      "id": "challenger-labanotation",
+      "label": "Labanotation score",
+      "verdict": "declined",
+      "lineage": "Dance notation on a vertical staff",
+      "thesis": "All activity climbs a shared time staff.",
+      "palette": ["#f4f3ef", "#202524", "#adb5b0"],
+      "materials": ["score paper", "ink blocks"],
+      "viewport": "Upcoming releases rise through a center staff with decisions to either side.",
+      "case": "Precise time is useful, but the specialized notation slows household reading.",
+      "risk": "Users could mistake a designed code for a necessary task to decode.",
+      "kept": "Consistent time axis across views.",
+      "wireframe": {"cols": 12, "rows": 10, "regions": [{"label": "left", "x": 0, "y": 0, "w": 5, "h": 10}, {"label": "time", "x": 5, "y": 0, "w": 2, "h": 10, "accent": true}, {"label": "right", "x": 7, "y": 0, "w": 5, "h": 10}]},
+      "comp": ".impeccable/mocks/decision/challenger-labanotation.webp"
+    },
+    {
+      "id": "challenger-anime",
+      "label": "Anime crisis wall",
+      "verdict": "declined",
+      "lineage": "Nineties animated command center",
+      "thesis": "Every media event becomes a large system reading.",
+      "palette": ["#030303", "#f08b38", "#d1dc51", "#b82e2e"],
+      "materials": ["phosphor display", "hazard bands"],
+      "viewport": "A giant countdown takes over the upcoming view while health data frames it.",
+      "case": "It exposes status dramatically, but most household activity is routine and deliberate.",
+      "risk": "An unchanged approval may read as a crisis or warning.",
+      "kept": "Real failures may interrupt the quiet hierarchy.",
+      "wireframe": {"cols": 12, "rows": 10, "regions": [{"label": "countdown", "x": 2, "y": 0, "w": 8, "h": 7, "accent": true}, {"label": "status", "x": 0, "y": 7, "w": 12, "h": 3}]},
+      "comp": ".impeccable/mocks/decision/challenger-anime.webp"
+    },
+    {
+      "id": "challenger-depot",
+      "label": "Depot destination blind",
+      "verdict": "declined",
+      "lineage": "Mechanical destination blinds",
+      "thesis": "The next date steps into a fixed schedule window.",
+      "palette": ["#123c34", "#f5cf4e", "#e9e4d0"],
+      "materials": ["bottle green cloth", "stitched labels"],
+      "viewport": "A fixed window reveals upcoming titles in snapped courses.",
+      "case": "The schedule is clear, but its stopped mid-step error metaphor conflicts with a deliberate waiting approval.",
+      "risk": "Turning the approval shelf into a stuck mechanism would misstate the product.",
+      "kept": "Discrete status changes without false urgency.",
+      "wireframe": {"cols": 12, "rows": 10, "regions": [{"label": "window", "x": 0, "y": 0, "w": 12, "h": 7, "accent": true}, {"label": "state", "x": 0, "y": 7, "w": 12, "h": 3}]},
+      "comp": ".impeccable/mocks/decision/challenger-depot.webp",
+      "board": "https://impeccable.style/worlds/cards/operate-c-depot-blind-courses.webp"
+    }
+  ],
+  "reroll": {"registers": ["safer", "bolder"]},
+  "buildPath": {"value": "code", "toggle": true},
+  "canon": true,
+  "canonCard": {
+    "label": "The category standard",
+    "thesis": "A polished media dashboard with conventional navigation and cards.",
+    "palette": ["#101827", "#f5f7fb", "#5574c5"],
+    "materials": ["neutral panels", "poster grid"],
+    "viewport": "Summary cards above a poster list, followed by approvals and activity.",
+    "risk": "Its hierarchy may make coming releases feel like one metric among many.",
+    "wireframe": {"cols": 12, "rows": 10, "regions": [{"label": "stats", "x": 0, "y": 0, "w": 12, "h": 3}, {"label": "poster list", "x": 0, "y": 3, "w": 12, "h": 7, "accent": true}]},
+    "comp": ".impeccable/mocks/decision/canon.webp"
+  },
+  "steer": true
+}

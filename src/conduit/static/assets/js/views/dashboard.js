@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import {
-  card, downloadRow, emptyState, paintProgress, poster, progressBar, toast,
+  card, downloadRow, emptyState, paintProgress, poster, toast,
 } from '../components.js';
 import { store } from '../store.js';
 import { bytes, dayLabel, episodeCode, html, relativeTime, setHTML } from '../util.js';
@@ -15,21 +15,46 @@ export default {
     const s = store.summary;
     const active = store.byState('downloading');
     const groups = store.pendingGroups;
-    // Two different questions. "Am I ready to start season 4?" is not the same
-    // decision as "do I want this title at all?", so they do not share a list.
     const continuations = groups.filter((g) => g.kind === 'continuation');
     const fresh = groups.filter((g) => g.kind !== 'continuation');
-    const soon = store.upcoming.slice(0, 8);
+    const now = new Date();
+    const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'),
+                   String(now.getDate()).padStart(2, '0')].join('-');
+    const scheduled = store.upcoming.filter((item) => item.air_date?.slice(0, 10) >= today);
+    const next = scheduled.slice(0, 5);
+    const later = scheduled.slice(5, 8);
 
     setHTML(root, html`
-      <div class="stats">
-        ${statTile('Downloading', s.downloading ?? 0, active.length ? 'in flight now' : 'idle', 'stat--accent')}
-        ${statTile('Awaiting you', s.pending_approval ?? 0, 'approvals', (s.pending_approval ? 'stat--warn' : ''))}
-        ${statTile('Queued', s.queued ?? 0, 'ready to start')}
-        ${statTile('Completed', s.completed ?? 0, s.library_size || '0 B')}
-        ${statTile('Upcoming', s.upcoming ?? 0, 'tracked releases')}
-        ${statTile('Problems', (s.failed ?? 0) + (s.no_space ?? 0), 'failed or out of space',
-                   ((s.failed ?? 0) + (s.no_space ?? 0)) ? 'stat--err' : '')}
+      <section class="program" aria-labelledby="program-title">
+        <div class="program__head">
+          <div>
+            <h2 id="program-title">Coming up</h2>
+            <p>${s.upcoming ?? 0} tracked releases</p>
+          </div>
+          <a class="btn btn--sm" href="#/calendar">Open calendar</a>
+        </div>
+        ${next.length ? html`
+          <div class="program__body">
+            ${featureRelease(next[0])}
+            <div class="program__run" aria-label="Following releases">
+              ${next.slice(1).length
+                ? next.slice(1).map(showtimeRow)
+                : html`<div class="program__quiet">No other dates scheduled yet.</div>`}
+            </div>
+          </div>`
+          : html`<div class="program__empty">
+              <p>No releases have a future date yet.</p>
+              <a class="btn btn--primary" href="#/calendar">View calendar</a>
+            </div>`}
+      </section>
+
+      <div class="status-board" aria-label="Current status">
+        ${statusCell('Downloading', s.downloading ?? 0, active.length ? 'in flight now' : 'idle', 'status-board__cell--active')}
+        ${statusCell('Awaiting you', s.pending_approval ?? 0, 'approvals')}
+        ${statusCell('Queued', s.queued ?? 0, 'ready to start')}
+        ${statusCell('Completed', s.completed ?? 0, s.library_size || '0 B')}
+        ${statusCell('Problems', (s.failed ?? 0) + (s.no_space ?? 0), 'failed or out of space',
+                     ((s.failed ?? 0) + (s.no_space ?? 0)) ? 'status-board__cell--fault' : '')}
       </div>
 
       ${unmatchedCard()}
@@ -42,7 +67,7 @@ export default {
               the next season of something you already watch — it waits here until you start it
             </span>
           </div>
-          ${continuations.map(continuationCard)}
+          <div class="approval-grid">${continuations.map(continuationCard)}</div>
         </div>` : ''}
 
       ${fresh.length ? html`
@@ -51,7 +76,7 @@ export default {
             <h2>Needs your approval</h2>
             <span class="sectionhead__note">new titles, and anything over the size gate</span>
           </div>
-          ${fresh.map(approvalCard)}
+          <div class="approval-grid">${fresh.map(approvalCard)}</div>
         </div>` : ''}
 
       <div class="split">
@@ -75,11 +100,9 @@ export default {
               <span class="muted">Loading…</span>
             </div>`)}
           ${card('Storage', html`<div class="card__body">${store.drives.map(driveRow)}</div>`)}
-          ${card('Coming up',
-            soon.length
-              ? html`<div class="list">${soon.map(upcomingRow)}</div>`
-              : emptyState('◷', 'Nothing scheduled'),
-            html`<a class="btn btn--sm btn--ghost" href="#/calendar">Calendar</a>`)}
+          ${later.length ? card('Later on',
+            html`<div class="list">${later.map(upcomingRow)}</div>`,
+            html`<a class="btn btn--sm btn--ghost" href="#/calendar">Calendar</a>`) : ''}
           ${card('System', html`<div class="card__body stack" style="gap:8px">${systemRows()}</div>`)}
         </div>
       </div>
@@ -116,10 +139,12 @@ export default {
     }
     if (action === 'approve-group' || action === 'deny-group') {
       const ids = JSON.parse(target.dataset.ids);
-      if (action === 'approve-group') await api.approve(ids);
-      else await api.deny(ids);
-      toast(`${action === 'approve-group' ? 'Approved' : 'Denied'} ${ids.length} item(s)`,
-            action === 'approve-group' ? 'ok' : '');
+      const approving = action === 'approve-group';
+      const result = approving ? await api.approve(ids) : await api.deny(ids);
+      const changed = approving ? result.approved : result.denied;
+      toast(changed
+        ? `${approving ? 'Approved' : 'Denied'} ${changed} item(s)`
+        : 'These approvals were already handled', approving && changed ? 'ok' : '');
       store.refresh();
       return true;
     }
@@ -141,7 +166,7 @@ function unmatchedCard() {
   return html`
     <section class="card card--warn">
       <header class="card__head">
-        <h2>⚠ ${rows.length} librar${rows.length === 1 ? 'y entry Plex has' : 'y entries Plex has'} not matched</h2>
+        <h2>${rows.length} librar${rows.length === 1 ? 'y entry Plex has' : 'y entries Plex has'} not matched</h2>
       </header>
       <div class="card__body stack" style="gap:10px">
         <p class="muted" style="margin:0">
@@ -164,13 +189,53 @@ function unmatchedCard() {
     </section>`;
 }
 
-function statTile(label, value, hint, cls = '') {
+function statusCell(label, value, hint, cls = '') {
   return html`
-    <div class="stat ${cls}">
-      <div class="stat__label">${label}</div>
-      <div class="stat__value">${value}</div>
-      <div class="stat__hint">${hint}</div>
+    <div class="status-board__cell ${cls}">
+      <span class="status-board__value">${value}</span>
+      <span class="status-board__text"><strong>${label}</strong><small>${hint}</small></span>
     </div>`;
+}
+
+function releaseDate(item) {
+  const date = new Date(`${item.air_date.slice(0, 10)}T12:00:00`);
+  return {
+    day: date.toLocaleDateString(undefined, { day: '2-digit' }),
+    month: date.toLocaleDateString(undefined, { month: 'short' }),
+    weekday: date.toLocaleDateString(undefined, { weekday: 'long' }),
+  };
+}
+
+function featureRelease(item) {
+  const date = releaseDate(item);
+  const code = episodeCode(item.season, item.episode);
+  return html`
+    <a class="program__feature" href="#/calendar/${item.air_date.slice(0, 10)}">
+      <div class="program__date">
+        <span>${date.weekday}</span>
+        <strong>${date.day}</strong>
+        <span>${date.month}</span>
+      </div>
+      <div class="program__poster">${poster(item.poster_path, item.title)}</div>
+      <div class="program__feature-copy">
+        <h3>${item.title}</h3>
+        ${code ? html`<p>${code}${item.episode_title ? ` · ${item.episode_title}` : ''}</p>` : ''}
+        <span>View this date in Calendar</span>
+      </div>
+    </a>`;
+}
+
+function showtimeRow(item) {
+  const date = releaseDate(item);
+  const code = episodeCode(item.season, item.episode);
+  return html`
+    <a class="program__row" href="#/calendar/${item.air_date.slice(0, 10)}">
+      <span class="program__row-date"><strong>${date.day}</strong><small>${date.month}</small></span>
+      <span class="program__row-title"><strong>${item.title}</strong>
+        <small>${code ? `${code}${item.episode_title ? ` · ${item.episode_title}` : ''}` : date.weekday}</small>
+      </span>
+      <span class="program__row-arrow" aria-hidden="true"></span>
+    </a>`;
 }
 
 function pendingRow(item) {
@@ -188,13 +253,15 @@ function pendingRow(item) {
     </div>`;
 }
 
-/**
- * The next season of a show already on the shelf.
- *
- * Deliberately not styled as a warning: nothing is wrong, and the card is
- * *meant* to sit here. It is a shelf, not an inbox — the question is "am I
- * ready to start this?", and leaving it untouched is a valid answer.
- */
+function approvalDetails(group) {
+  return group.items.length > 1
+    ? html`<details class="approval__details">
+        <summary>Review ${group.items.length} releases</summary>
+        <div>${group.items.map(pendingRow)}</div>
+      </details>`
+    : '';
+}
+
 function continuationCard(group) {
   const ids = JSON.stringify(group.ids);
   const prev = group.previous_season;
@@ -204,31 +271,31 @@ function continuationCard(group) {
       <header class="approval__head">
         ${poster(group.poster_path, group.title)}
         <div class="grow">
-          <div class="item__title">${group.title}</div>
+          <div class="item__title trunc" title="${group.title}">${group.title}</div>
           <div class="item__meta">
             ${season !== undefined && season !== null
               ? html`<span class="pill pill--accent">Season ${season} ready</span>` : ''}
             <span class="faint">${group.total_size}</span>
           </div>
           ${prev ? html`
-            <div class="approval__progress">
-              ${progressBar(prev.progress)}
-              <span class="faint mono">
-                ${prev.watched}/${prev.episodes} through season ${prev.season}
-              </span>
+            <div class="approval__context faint">
+              ${prev.watched}/${prev.episodes} through season ${prev.season}
             </div>` : ''}
-        </div>
-        <div class="item__actions">
-          <button class="btn btn--sm btn--primary" data-action="approve-group" data-ids='${ids}'>
-            ${season !== undefined && season !== null ? html`Start season ${season}` : 'Start'}
-          </button>
-          <button class="btn btn--sm btn--ghost" data-action="deny-group" data-ids='${ids}'
-                  title="Blocklists this release so it is never offered again. If you are simply not ready yet, leave the card where it is.">
-            Not this one
-          </button>
+          ${group.items.length === 1
+            ? html`<div class="approval__release trunc" title="${group.items[0].release_name}">${group.items[0].release_name}</div>`
+            : ''}
+          <div class="approval__actions">
+            <button class="btn btn--sm btn--primary" data-action="approve-group" data-ids='${ids}'>
+              ${season !== undefined && season !== null ? html`Start season ${season}` : 'Start'}
+            </button>
+            <button class="btn btn--sm btn--ghost" data-action="deny-group" data-ids='${ids}'
+                    title="Blocklists this release so it is never offered again. If you are simply not ready yet, leave the card where it is.">
+              Not this one
+            </button>
+          </div>
         </div>
       </header>
-      <div class="approval__body">${group.items.map(pendingRow)}</div>
+      ${approvalDetails(group)}
     </section>`;
 }
 
@@ -239,22 +306,25 @@ function approvalCard(group) {
       <header class="approval__head">
         ${poster(group.poster_path, group.title)}
         <div class="grow">
-          <div class="item__title">${group.title}</div>
+          <div class="item__title trunc" title="${group.title}">${group.title}</div>
           <div class="item__meta">
             <span class="pill pill--warn">${group.count} item${group.count === 1 ? '' : 's'}</span>
             <span class="faint">${group.total_size} total</span>
           </div>
-        </div>
-        <div class="item__actions">
-          <button class="btn btn--sm btn--primary" data-action="approve-group" data-ids='${ids}'>
-            Approve all
-          </button>
-          <button class="btn btn--sm btn--danger" data-action="deny-group" data-ids='${ids}'>
-            Deny all
-          </button>
+          ${group.items.length === 1
+            ? html`<div class="approval__release trunc" title="${group.items[0].release_name}">${group.items[0].release_name}</div>`
+            : ''}
+          <div class="approval__actions">
+            <button class="btn btn--sm btn--primary" data-action="approve-group" data-ids='${ids}'>
+              ${group.count === 1 ? 'Approve' : 'Approve all'}
+            </button>
+            <button class="btn btn--sm btn--danger" data-action="deny-group" data-ids='${ids}'>
+              ${group.count === 1 ? 'Deny' : 'Deny all'}
+            </button>
+          </div>
         </div>
       </header>
-      <div class="approval__body">${group.items.map(pendingRow)}</div>
+      ${approvalDetails(group)}
     </section>`;
 }
 

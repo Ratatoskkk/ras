@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import date, timedelta
 
 import pytest
 
+from conduit.clients.indexers.base import IndexerPool
+from conduit.clients.plex import PlexClient
 from conduit.config import ConfigStore, Settings
 from conduit.db.repo import Repos
 from conduit.domain.models import (
@@ -28,8 +31,9 @@ from conduit.services import (
     watchlist,
 )
 from conduit.services.context import Conduit
+from conduit.util.resilience import TransientError
 from conftest import make_release
-from fakes import FakePlex, FakeQbt, FakeTmdb, pool
+from fakes import FakeIndexer, FakePlex, FakeQbt, FakeTmdb, pool
 
 GIB = 1024**3
 
@@ -98,6 +102,80 @@ class TestLibraryIndexing:
         ctx.plex = FakePlex(library=[])
         await library.index_library(ctx)
         assert await ctx.repos.library.have_episodes("125988") == {(1, 1)}
+
+    async def test_partial_section_failure_keeps_the_previous_mirror(self, ctx, monkeypatch) -> None:
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="movie", rating_key="old", tmdb_id="27205", title="Inception"),
+        ])
+        plex = PlexClient("http://plex.test:32400", "token")
+
+        async def sections():
+            return [{"key": "good", "type": "movie"}, {"key": "bad", "type": "movie"}]
+
+        async def page(key, item_type):
+            if key == "bad":
+                raise RuntimeError("section unavailable")
+            return [{"ratingKey": "new", "title": "Other Film", "Guid": [{"id": "tmdb://99"}]}]
+
+        monkeypatch.setattr(plex, "sections", sections)
+        monkeypatch.setattr(plex, "_paged", page)
+        ctx.plex = plex
+        try:
+            with pytest.raises(RuntimeError, match="section unavailable"):
+                await library.index_library(ctx)
+        finally:
+            await plex.aclose()
+
+        assert await ctx.repos.library.has_movie("27205")
+        assert await ctx.repos.library.has_movie("99") is None
+
+    async def test_short_plex_pages_continue_until_the_reported_total(self, monkeypatch) -> None:
+        plex = PlexClient("http://plex.test:32400", "token")
+        starts = []
+
+        async def sections():
+            return [{"key": "movies", "type": "movie"}]
+
+        async def get_json(path, *, params):
+            start = params["X-Plex-Container-Start"]
+            starts.append(start)
+            batch = ([{"ratingKey": "1"}, {"ratingKey": "2"}] if start == 0
+                     else [{"ratingKey": "3"}])
+            return {"MediaContainer": {"totalSize": 3, "Metadata": batch}}
+
+        monkeypatch.setattr(plex, "sections", sections)
+        monkeypatch.setattr(plex.server, "get_json", get_json)
+        try:
+            rows = await plex.index_library()
+        finally:
+            await plex.aclose()
+        assert [row.rating_key for row in rows] == ["1", "2", "3"]
+        assert starts == [0, 2]
+
+    async def test_incomplete_plex_page_keeps_the_previous_mirror(self, ctx, monkeypatch) -> None:
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="movie", rating_key="old", tmdb_id="27205", title="Inception"),
+        ])
+        plex = PlexClient("http://plex.test:32400", "token")
+
+        async def sections():
+            return [{"key": "movies", "type": "movie"}]
+
+        async def get_json(path, *, params):
+            start = params["X-Plex-Container-Start"]
+            batch = ([{"ratingKey": "new", "title": "Other Film"}] if start == 0
+                     else [])
+            return {"MediaContainer": {"totalSize": 2, "Metadata": batch}}
+
+        monkeypatch.setattr(plex, "sections", sections)
+        monkeypatch.setattr(plex.server, "get_json", get_json)
+        ctx.plex = plex
+        try:
+            with pytest.raises(TransientError, match="incomplete page"):
+                await library.index_library(ctx)
+        finally:
+            await plex.aclose()
+        assert await ctx.repos.library.has_movie("27205")
 
     async def test_unmatched_entries_are_surfaced_not_swallowed(self, ctx) -> None:
         """The one gap de-duplication cannot close, made visible.
@@ -214,6 +292,51 @@ class TestWatchlist:
         wants = await ctx.repos.wanted.for_media(int(media[0]["id"]))
         assert wants[0]["state"] == WantedState.SEARCHING
 
+    @pytest.mark.parametrize("days_from_now, expected", [
+        (-1, WantedState.SEARCHING),
+        (1, WantedState.WAITING),
+    ])
+    async def test_movie_search_starts_when_its_release_date_arrives(
+        self, ctx, days_from_now, expected
+    ) -> None:
+        release_date = date.today() + timedelta(days=days_from_now)
+
+        class MovieTmdb(FakeTmdb):
+            async def movie_release_date(self, tmdb_id):
+                return release_date, "theatrical" if days_from_now < 0 else "home"
+
+        ctx.tmdb = MovieTmdb()
+        ctx.plex = FakePlex(watchlist=[
+            WatchlistEntry(rating_key="rk1", guid="g", title="Film",
+                           media_type="movie", tmdb_id="42"),
+        ])
+        await watchlist.sync_watchlist(ctx)
+        media_id = (await ctx.repos.media.list_all())[0]["id"]
+        assert (await ctx.repos.wanted.for_media(media_id))[0]["state"] == expected
+
+    async def test_unresolved_show_stays_on_the_watchlist(self, ctx) -> None:
+        ctx.plex = FakePlex(watchlist=[
+            WatchlistEntry(rating_key="rk1", guid="g", title="Unknown Show",
+                           media_type="show"),
+        ])
+        result = await watchlist.sync_watchlist(ctx)
+        assert result["failed"] == 1
+        assert ctx.plex.removed == []
+        media_id = (await ctx.repos.media.list_all())[0]["id"]
+        assert await ctx.repos.wanted.for_media(media_id) == []
+
+    async def test_show_with_empty_episode_details_stays_on_watchlist(self, ctx) -> None:
+        ctx.tmdb = FakeTmdb(shows={"42": {"season/1": {"episodes": []}}})
+        ctx.plex = FakePlex(watchlist=[
+            WatchlistEntry(rating_key="rk1", guid="g", title="Pending Show",
+                           media_type="show", tmdb_id="42"),
+        ])
+        result = await watchlist.sync_watchlist(ctx)
+        assert result["failed"] == 1
+        assert ctx.plex.removed == []
+        media_id = (await ctx.repos.media.list_all())[0]["id"]
+        assert await ctx.repos.wanted.for_media(media_id) == []
+
     async def test_item_is_only_removed_after_it_is_recorded(self, ctx) -> None:
         ctx.plex = FakePlex(watchlist=[
             WatchlistEntry(rating_key="rk1", guid="g", title="Inception",
@@ -310,6 +433,20 @@ class TestCalendar:
         wants = await ctx.repos.wanted.for_media(media_id)
         assert {w["episode"] for w in wants} == {2, 3}
 
+    async def test_a_newly_owned_movie_stops_being_searched(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="movie", tmdb_id="27205", title="Inception"
+        )
+        wanted_id = await ctx.repos.wanted.upsert(
+            media_id=media_id, season=None, episode=None, state=WantedState.SEARCHING
+        )
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="movie", rating_key="1", tmdb_id="27205", title="Inception"),
+        ])
+        await calendar.refresh_media(ctx, await ctx.repos.media.get(media_id))
+        assert (await ctx.repos.wanted.get(wanted_id))["state"] == WantedState.DOWNLOADED
+        assert await ctx.repos.wanted.due_for_search() == []
+
 
 class TestSupervisorCadence:
     """A cadence change has to be felt, not just saved.
@@ -372,6 +509,50 @@ class TestSupervisorCadence:
         )
         assert time.monotonic() - started < 1.0
 
+    async def test_trigger_during_a_run_starts_another_run(self, ctx) -> None:
+        sup = supervisor.Supervisor(ctx)
+        first_started = asyncio.Event()
+        finish_first = asyncio.Event()
+        second_started = asyncio.Event()
+        runs = 0
+
+        async def run(_ctx) -> None:
+            nonlocal runs
+            runs += 1
+            if runs == 1:
+                first_started.set()
+                await finish_first.wait()
+            else:
+                second_started.set()
+
+        sup.register(supervisor.TaskSpec(
+            name="t", description="", run=run, interval=lambda _ctx: 3600,
+            jitter=0.0,
+        ))
+        await sup.start()
+        try:
+            await asyncio.wait_for(first_started.wait(), timeout=1)
+            assert sup.trigger("t") is True
+            finish_first.set()
+            await asyncio.wait_for(second_started.wait(), timeout=1)
+            assert runs == 2
+        finally:
+            await sup.stop()
+
+
+async def test_live_indexer_filter_change_rebuilds_client(ctx, monkeypatch) -> None:
+    monkeypatch.setattr(Settings, "tracker_api_key", lambda self, env_var: "test-key")
+    ctx.rebuild_indexers()
+    old = ctx.indexers.indexers[0]
+    try:
+        ctx.config.indexers[0].only_alive = False
+        ctx.rebuild_indexers()
+        assert ctx.indexers.indexers[0] is not old
+        assert ctx.indexers.indexers[0].config.only_alive is False
+    finally:
+        await ctx.indexers.aclose()
+        await old.aclose()
+
 
 class TestSearch:
     async def _followed_show(self, ctx) -> int:
@@ -381,6 +562,49 @@ class TestSearch:
         )
         await calendar.refresh_media(ctx, await ctx.repos.media.get(media_id))
         return media_id
+
+    async def test_scheduled_search_starts_after_air_date_without_calendar_refresh(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        aired = (date.today() - timedelta(days=1)).isoformat()
+        wanted_id = await ctx.repos.wanted.upsert(
+            media_id=media_id, season=1, episode=4, air_date=aired,
+            state=WantedState.WAITING,
+        )
+        ctx.indexers, _ = pool([make_release(
+            "Silo S01E04 2160p ATVP WEB-DL DV HDR10+ H.265-Kitsune",
+            indexer="Fake", tmdb_id="125988", size_bytes=9 * GIB,
+        )])
+
+        assert (await search.run_search(ctx))["grabbed"] == 1
+        assert (await ctx.repos.wanted.get(wanted_id))["state"] == WantedState.GRABBED
+
+    async def test_scheduled_search_recovers_a_release_after_slowing_down(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        aired = (date.today() - timedelta(days=10)).isoformat()
+        wanted_id = await ctx.repos.wanted.upsert(
+            media_id=media_id, season=1, episode=4, air_date=aired,
+            state=WantedState.SEARCHING,
+        )
+        await ctx.repos.wanted.record_search_miss(wanted_id, "nothing found")
+        await ctx.repos.wanted.set_state(wanted_id, WantedState.UNAVAILABLE)
+        await ctx.repos.wanted.db.execute(
+            "UPDATE wanted SET search_attempts=100, "
+            "first_search_at=datetime('now','-200 days'), "
+            "last_search_at=datetime('now','-2 days') WHERE id=?", (wanted_id,)
+        )
+        ctx.indexers, _ = pool([
+            make_release(
+                "Silo S01E04 2160p ATVP WEB-DL DV HDR10+ H.265-Kitsune",
+                indexer="Fake", tmdb_id="125988", size_bytes=9 * GIB,
+            ),
+        ])
+
+        assert (await search.run_search(ctx))["grabbed"] == 1
+        assert (await ctx.repos.wanted.get(wanted_id))["state"] == WantedState.GRABBED
 
     async def test_grabs_a_season_pack_and_gates_it_for_approval(self, ctx) -> None:
         media_id = await self._followed_show(ctx)
@@ -394,8 +618,74 @@ class TestSearch:
         assert rows[0]["state"] == DownloadState.PENDING_APPROVAL
         assert rows[0]["display_title"] == "Silo (Season 1)"
         assert rows[0]["is_season_pack"] == 1
+        assert rows[0]["wanted_count"] == 3
         wants = await ctx.repos.wanted.for_media(media_id)
         assert all(w["state"] == WantedState.GRABBED for w in wants)
+
+    async def test_pack_size_uses_whole_season_when_only_some_episodes_are_missing(
+        self, ctx
+    ) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="episode", rating_key=str(episode),
+                        show_tmdb_id="125988", season=1, episode=episode)
+            for episode in range(1, 8)
+        ])
+        for episode in range(8, 11):
+            await ctx.repos.wanted.upsert(
+                media_id=media_id, season=1, episode=episode,
+                state=WantedState.SEARCHING,
+            )
+        ctx.indexers, _ = pool([
+            make_release("Silo S01 2160p Remux DV HDR10 H.265-GRP",
+                         tmdb_id="125988", size_bytes=900 * GIB),
+        ])
+
+        preview = await search.preview_media(ctx, media_id)
+        assert preview["candidates"][0]["accepted"] is True
+        result = await search.run_search(ctx)
+
+        assert result["grabbed"] == 1
+        assert (await ctx.repos.downloads.dashboard())[0]["wanted_count"] == 3
+
+    async def test_one_missing_episode_does_not_grab_a_whole_season_pack(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="episode", rating_key=str(number),
+                        show_tmdb_id="125988", season=1, episode=number)
+            for number in (1, 2)
+        ])
+        await ctx.repos.wanted.upsert(
+            media_id=media_id, season=1, episode=3, state=WantedState.SEARCHING
+        )
+        ctx.indexers, _ = pool([
+            make_release("Silo S01 2160p ATVP WEB-DL DV HDR10 H.265-GRP",
+                         tmdb_id="125988", size_bytes=70 * GIB),
+        ])
+
+        assert (await search.run_search(ctx))["grabbed"] == 0
+        assert await ctx.repos.downloads.dashboard() == []
+        preview = await search.preview_media(ctx, media_id)
+        assert any("pack" in reason for reason in preview["candidates"][0]["rejections"])
+
+    async def test_search_limit_does_not_split_one_season_pack(self, ctx) -> None:
+        media_id = await self._followed_show(ctx)
+        ctx.indexers, _ = pool([
+            make_release("Silo S01 2160p ATVP WEB-DL DV HDR10 H.265-Kitsune",
+                         tmdb_id="125988", size_bytes=88 * GIB),
+        ])
+
+        result = await search.run_search(ctx, limit=2)
+
+        assert result["grabbed"] == 1
+        assert result["searched"] == 3
+        wants = await ctx.repos.wanted.for_media(media_id)
+        assert all(w["state"] == WantedState.GRABBED for w in wants)
+        assert (await ctx.repos.downloads.dashboard())[0]["wanted_count"] == 3
 
     async def test_falls_back_to_single_episodes_when_no_pack_exists(self, ctx) -> None:
         await self._followed_show(ctx)
@@ -410,6 +700,60 @@ class TestSearch:
         titles = {r["display_title"] for r in await ctx.repos.downloads.dashboard()}
         assert titles == {"Silo (S01E01)", "Silo (S01E02)"}
         assert any(q.episode is not None for q in indexer.queries)
+
+    async def test_multi_episode_release_claims_every_episode_it_contains(self, ctx) -> None:
+        media_id = await self._followed_show(ctx)
+        await ctx.repos.wanted.set_state(
+            (await ctx.repos.wanted.for_media(media_id))[2]["id"], WantedState.WATCHED
+        )
+        ctx.indexers, _ = pool([
+            make_release("Silo S01E01-E02 2160p ATVP WEB-DL DV HDR10 H.265-Kitsune",
+                         tmdb_id="125988", size_bytes=18 * GIB),
+        ])
+
+        assert (await search.run_search(ctx))["grabbed"] == 1
+        wants = await ctx.repos.wanted.for_media(media_id)
+        assert [row["state"] for row in wants] == [
+            WantedState.GRABBED, WantedState.GRABBED, WantedState.WATCHED
+        ]
+        assert (await ctx.repos.downloads.dashboard())[0]["wanted_count"] == 2
+
+    async def test_season_range_pack_claims_only_its_seasons(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        for season in (1, 2, 3, 4):
+            await ctx.repos.wanted.upsert(
+                media_id=media_id, season=season, episode=None,
+                state=WantedState.SEARCHING,
+            )
+        ctx.indexers, _ = pool([
+            make_release("Silo S01-S03 2160p ATVP WEB-DL DV HDR10 H.265-GRP",
+                         tmdb_id="125988", size_bytes=60 * GIB),
+        ])
+
+        assert (await search.run_search(ctx))["grabbed"] == 1
+        wants = await ctx.repos.wanted.for_media(media_id)
+        assert [row["state"] for row in wants] == [
+            WantedState.GRABBED, WantedState.GRABBED,
+            WantedState.GRABBED, WantedState.SEARCHING,
+        ]
+        download = (await ctx.repos.downloads.dashboard())[0]
+        assert download["wanted_count"] == 3
+        assert download["display_title"] == "Silo (Seasons 1–3)"
+
+    async def test_release_inspector_includes_candidates_after_the_first_fifty(self, ctx) -> None:
+        media_id = await self._followed_show(ctx)
+        ctx.indexers, _ = pool([
+            make_release(f"Silo S01E01 2160p WEB-DL-GRP{number}",
+                         indexer_id=str(number), tmdb_id="125988")
+            for number in range(51)
+        ])
+
+        result = await search.preview_media(ctx, media_id)
+
+        assert result["total"] == 51
+        assert len(result["candidates"]) == 51
 
     async def test_single_episodes_are_not_gated(self, ctx) -> None:
         await self._followed_show(ctx)
@@ -444,6 +788,43 @@ class TestSearch:
         )
         await search.run_search(ctx)
         assert len(await ctx.repos.downloads.dashboard()) == 1
+
+    async def test_concurrent_searches_do_not_grab_two_releases_for_one_want(self, ctx) -> None:
+        media_id = await self._followed_show(ctx)
+        releases = [
+            make_release(
+                f"Silo S01 2160p ATVP WEB-DL DV HDR10 H.265-GRP{number}",
+                tmdb_id="125988", indexer_id=str(number), size_bytes=88 * GIB,
+            )
+            for number in (1, 2)
+        ]
+        both_searching = asyncio.Event()
+
+        class AlternatingIndexer(FakeIndexer):
+            calls = 0
+
+            async def search(self, query):
+                self.calls += 1
+                call = self.calls
+                if call == 2:
+                    both_searching.set()
+                await both_searching.wait()
+                if call > 2:
+                    return []
+                return [releases[call - 1]]
+
+        ctx.indexers = IndexerPool([AlternatingIndexer()])
+
+        results = await asyncio.gather(
+            search.search_media_now(ctx, media_id),
+            search.search_media_now(ctx, media_id),
+        )
+
+        assert sum(result["grabbed"] for result in results) == 1
+        assert len(await ctx.repos.downloads.dashboard()) == 1
+        assert {row["state"] for row in await ctx.repos.wanted.for_media(media_id)} == {
+            WantedState.GRABBED
+        }
 
     async def test_nothing_you_already_have_is_ever_searched_for(self, ctx) -> None:
         """The money question on a private tracker: no re-downloads.
@@ -511,6 +892,20 @@ class TestSearch:
         ctx.indexers, indexer = pool([])
         indexer.fail = True
         assert (await search.run_search(ctx))["grabbed"] == 0
+        wants = await ctx.repos.wanted.for_media((await ctx.repos.media.list_all())[0]["id"])
+        assert all(w["search_attempts"] == 0 for w in wants)
+
+    async def test_manual_search_does_not_report_a_known_release_as_new(self, ctx) -> None:
+        media_id = await self._followed_show(ctx)
+        ctx.indexers, _ = pool([
+            make_release("Silo S01 2160p ATVP WEB-DL DV HDR10 H.265-Kitsune",
+                         tmdb_id="125988", size_bytes=88 * GIB),
+        ])
+        assert (await search.run_search(ctx))["grabbed"] == 1
+        await ctx.repos.wanted.set_state_for_media(media_id, WantedState.SEARCHING)
+        result = await search.search_media_now(ctx, media_id)
+        assert result["grabbed"] == 0
+        assert len(await ctx.repos.downloads.dashboard()) == 1
 
     async def test_pack_fallback_survives_a_season_level_want(self, ctx) -> None:
         """A title can hold both a season-level want and episode-level ones.
@@ -579,6 +974,31 @@ class TestSearch:
         assert result["candidates"][0]["accepted"] is True
         assert result["candidates"][-1]["rejections"]
         assert await ctx.repos.downloads.dashboard() == []
+
+    async def test_preview_explains_known_and_unwanted_releases(self, ctx) -> None:
+        media_id = await self._followed_show(ctx)
+        await ctx.repos.wanted.set_state(
+            (await ctx.repos.wanted.for_media(media_id))[1]["id"], WantedState.WATCHED
+        )
+        ctx.indexers, _ = pool([
+            make_release("Silo S01E01 2160p ATVP WEB-DL DV HDR10 H.265-GRP",
+                         tmdb_id="125988", indexer_id="known"),
+            make_release("Silo S01E02 2160p ATVP WEB-DL DV HDR10 H.265-GRP",
+                         tmdb_id="125988", indexer_id="seen"),
+            make_release("Other Show S01E01 2160p ATVP WEB-DL DV HDR10 H.265-GRP",
+                         indexer_id="wrong"),
+        ])
+        await ctx.repos.downloads.create(
+            media_id=media_id, display_title="Silo (S01E01)",
+            indexer="Test", indexer_id="known", state=DownloadState.DENIED,
+        )
+
+        result = await search.preview_media(ctx, media_id)
+        by_id = {candidate["indexer_id"]: candidate for candidate in result["candidates"]}
+
+        assert any("already selected" in reason for reason in by_id["known"]["rejections"])
+        assert any("outstanding" in reason for reason in by_id["seen"]["rejections"])
+        assert any("match" in reason for reason in by_id["wrong"]["rejections"])
 
 
 class TestPendingApprovals:
@@ -676,12 +1096,83 @@ class TestQueueDispatch:
         assert row["info_hash"] and len(row["info_hash"]) == 40
         assert ctx.qbt.added[0]["category"] == "conduit"
 
+    async def test_verified_size_crossing_gate_requires_approval_before_add(self, ctx) -> None:
+        from conduit.util import bencode
+
+        download_id = await self._queued(ctx)
+        ctx.config.policy.approval_size_threshold_gb = 1
+        ctx.indexers, indexer = pool([])
+
+        async def actual_torrent(release):
+            return bencode.encode({
+                b"announce": b"https://fake.test/announce",
+                b"info": {
+                    b"name": release.name.encode(),
+                    b"length": 2 * GIB,
+                    b"piece length": 262144,
+                },
+            })
+
+        indexer.fetch_torrent = actual_torrent
+        assert (await queue.dispatch_queue(ctx))["sent"] == 0
+        row = await ctx.repos.downloads.get(download_id)
+        assert row["state"] == DownloadState.PENDING_APPROVAL
+        assert row["size_bytes"] == 2 * GIB
+        assert ctx.qbt.added == []
+
+        assert await ctx.repos.downloads.approve(download_id)
+        assert (await queue.dispatch_queue(ctx))["sent"] == 1
+        assert (await ctx.repos.downloads.get(download_id))["state"] == DownloadState.DOWNLOADING
+
     async def test_dry_run_sends_nothing(self, ctx) -> None:
         await self._queued(ctx)
         ctx.config.policy.dry_run = True
         result = await queue.dispatch_queue(ctx)
         assert result["sent"] == 0
         assert ctx.qbt.added == []
+
+    async def test_removed_queued_download_is_never_dispatched(self, ctx) -> None:
+        download_id = await self._queued(ctx)
+        await ctx.repos.downloads.archive(download_id)
+
+        result = await queue.dispatch_queue(ctx)
+
+        assert result["sent"] == 0
+        assert ctx.qbt.added == []
+        assert (await ctx.repos.downloads.get(download_id))["archived"] == 1
+
+    async def test_manual_and_scheduled_dispatch_do_not_send_twice(self, ctx) -> None:
+        await self._queued(ctx)
+        ctx.indexers, _ = pool([])
+
+        results = await asyncio.gather(
+            queue.dispatch_queue(ctx), queue.dispatch_queue(ctx)
+        )
+
+        assert sum(result["sent"] for result in results) == 1
+        assert len(ctx.qbt.added) == 1
+
+    async def test_remove_during_torrent_fetch_does_not_leave_a_download(self, ctx) -> None:
+        download_id = await self._queued(ctx)
+        ctx.indexers, indexer = pool([])
+        fetched = asyncio.Event()
+        release_fetch = asyncio.Event()
+        fetch = indexer.fetch_torrent
+
+        async def delayed_fetch(release):
+            fetched.set()
+            await release_fetch.wait()
+            return await fetch(release)
+
+        indexer.fetch_torrent = delayed_fetch
+        dispatch = asyncio.create_task(queue.dispatch_queue(ctx))
+        await asyncio.wait_for(fetched.wait(), 2)
+        removal = asyncio.create_task(janitor.remove_download(ctx, download_id))
+        release_fetch.set()
+        await asyncio.wait_for(asyncio.gather(dispatch, removal), 2)
+
+        assert (await ctx.repos.downloads.get(download_id))["archived"] == 1
+        assert ctx.qbt.torrents_list == []
 
     async def test_insufficient_space_is_reported_not_swallowed(self, ctx) -> None:
         download_id = await self._queued(ctx, size=900_000 * GIB)
@@ -691,23 +1182,11 @@ class TestQueueDispatch:
         assert row["state"] == DownloadState.NO_SPACE
         assert "needs" in (row["error"] or "")
 
-    async def test_an_add_the_client_silently_dropped_is_reported_as_failed(
-        self, ctx, monkeypatch
+    async def test_tracker_timeout_does_not_bypass_pre_add_hash_and_size_checks(
+        self, ctx
     ) -> None:
-        """The real failure this was written for.
-
-        The tracker timed out handing over the .torrent, so the URL fallback
-        ran. qBittorrent answered "Ok." to the request and then never fetched
-        it. rás announced "Started ... 93.7 GB", marked it downloading, and the
-        monitor reported it "disappeared" seconds later -- twice, because the
-        user retried. An add that cannot be seen in the client is a failure.
-        """
-        monkeypatch.setattr(queue, "CONFIRM_ATTEMPTS", 2)
-        monkeypatch.setattr(queue, "CONFIRM_DELAY_SECONDS", 0)
+        """Without the file, its true size and info-hash remain unknown."""
         download_id = await self._queued(ctx)
-        ctx.qbt.url_adds_never_land = True
-
-        # No .torrent from the tracker, so dispatch falls back to the URL.
         class Timeout:
             async def fetch_torrent(self, release):
                 raise TimeoutError("ReadTimeout")
@@ -715,15 +1194,29 @@ class TestQueueDispatch:
 
         result = await queue.dispatch_queue(ctx)
         assert result["sent"] == 0
+        assert ctx.qbt.added == []
         row = await ctx.repos.downloads.get(download_id)
         assert row["state"] == DownloadState.FAILED
-        assert "never appeared" in (row["error"] or "")
+        assert "could not fetch .torrent" in (row["error"] or "")
 
         events = await ctx.repos.events.recent(limit=20, category="queue")
         assert not any("Started" in e["message"] for e in events)
 
-    async def test_a_url_add_the_client_accepts_is_tracked_by_tag(self, ctx) -> None:
-        """Without a hash, our own per-download tag is what proves it landed."""
+    async def test_malformed_torrent_is_not_sent_to_the_client(self, ctx) -> None:
+        download_id = await self._queued(ctx)
+
+        class Malformed:
+            async def fetch_torrent(self, release):
+                return b"d3:foo"
+
+        ctx.indexers = Malformed()
+        assert (await queue.dispatch_queue(ctx))["sent"] == 0
+        assert ctx.qbt.added == []
+        row = await ctx.repos.downloads.get(download_id)
+        assert row["state"] == DownloadState.FAILED
+        assert "malformed" in row["error"]
+
+    async def test_an_empty_torrent_fetch_does_not_reach_the_client(self, ctx) -> None:
         download_id = await self._queued(ctx)
 
         class Timeout:
@@ -731,11 +1224,24 @@ class TestQueueDispatch:
                 return None
         ctx.indexers = Timeout()
 
-        assert (await queue.dispatch_queue(ctx))["sent"] == 1
+        assert (await queue.dispatch_queue(ctx))["sent"] == 0
         row = await ctx.repos.downloads.get(download_id)
-        assert row["state"] == DownloadState.DOWNLOADING
-        # The hash was recovered from the client even though we never had it.
-        assert row["info_hash"]
+        assert row["state"] == DownloadState.FAILED
+        assert ctx.qbt.added == []
+
+    async def test_file_add_accepted_without_appearing_is_reported_as_failed(
+        self, ctx, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(queue, "CONFIRM_ATTEMPTS", 2)
+        monkeypatch.setattr(queue, "CONFIRM_DELAY_SECONDS", 0)
+        download_id = await self._queued(ctx)
+        ctx.indexers, _ = pool([])
+        ctx.qbt.file_adds_never_land = True
+
+        assert (await queue.dispatch_queue(ctx))["sent"] == 0
+        row = await ctx.repos.downloads.get(download_id)
+        assert row["state"] == DownloadState.FAILED
+        assert "never appeared" in (row["error"] or "")
 
     async def test_concurrency_limit_is_respected(self, ctx) -> None:
         ctx.config.policy.max_active_downloads = 1
@@ -755,8 +1261,86 @@ class TestQueueDispatch:
         assert await queue.retry_download(ctx, download_id)
         assert (await ctx.repos.downloads.get(download_id))["state"] == DownloadState.QUEUED
 
+    async def test_retry_does_not_requeue_a_want_already_in_plex(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="movie", tmdb_id="27205", title="Inception"
+        )
+        wanted_id = await ctx.repos.wanted.upsert(
+            media_id=media_id, season=None, episode=None,
+            state=WantedState.SEARCHING,
+        )
+        download_id = await ctx.repos.downloads.create(
+            media_id=media_id, wanted_id=wanted_id, display_title="Inception",
+            indexer="Fake", indexer_id="1", size_bytes=GIB,
+            state=DownloadState.FAILED, wanted_count=1,
+        )
+        await ctx.repos.wanted.set_state(
+            wanted_id, WantedState.DOWNLOADED, reason="present in library"
+        )
+
+        assert await queue.retry_download(ctx, download_id) is False
+        assert (await ctx.repos.downloads.get(download_id))["state"] == DownloadState.FAILED
+
 
 class TestMonitor:
+    async def test_legacy_season_range_completion_marks_only_covered_seasons(
+        self, ctx
+    ) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        for season in (1, 2, 3):
+            await ctx.repos.wanted.upsert(
+                media_id=media_id, season=season, episode=1,
+                state=WantedState.SEARCHING,
+            )
+        await ctx.repos.downloads.create(
+            media_id=media_id, display_title="Silo (Seasons 1–2)",
+            release_name="Silo S01-S02 2160p WEB-DL-GRP",
+            indexer="F", indexer_id="legacy-range", season=1,
+            is_season_pack=True, state=DownloadState.DOWNLOADING,
+            info_hash="b" * 40,
+        )
+        ctx.qbt.torrents_list.append(TorrentStatus(
+            info_hash="b" * 40, name="Silo S01-S02", state="stalledUP",
+            progress=1.0, eta_seconds=0, dlspeed=0, size_bytes=80 * GIB,
+            save_path="D:\\Torrents", content_path="",
+        ))
+
+        await monitor.monitor_downloads(ctx)
+
+        wants = await ctx.repos.wanted.for_media(media_id)
+        assert [row["state"] for row in wants] == [
+            WantedState.GRABBED, WantedState.GRABBED, WantedState.SEARCHING,
+        ]
+
+    async def test_non_contiguous_release_does_not_claim_middle_episode_on_completion(
+        self, ctx
+    ) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        for episode in (1, 2, 3):
+            await ctx.repos.wanted.upsert(
+                media_id=media_id, season=1, episode=episode,
+                state=WantedState.SEARCHING,
+            )
+        ctx.config.policy.prefer_season_packs = False
+        ctx.indexers, _ = pool([
+            make_release("Silo S01E01E03 2160p ATVP WEB-DL DV HDR10 H.265-Kitsune",
+                         indexer="Fake", tmdb_id="125988", size_bytes=18 * GIB),
+        ])
+        assert (await search.run_search(ctx))["grabbed"] == 1
+        assert (await queue.dispatch_queue(ctx))["sent"] == 1
+        ctx.qbt.complete_all()
+
+        await monitor.monitor_downloads(ctx)
+
+        wants = await ctx.repos.wanted.for_media(media_id)
+        assert [row["state"] for row in wants] == [
+            WantedState.GRABBED, WantedState.SEARCHING, WantedState.GRABBED
+        ]
+
     async def test_completion_updates_state_and_asks_plex_to_rescan(self, ctx) -> None:
         media_id = await ctx.repos.media.upsert(
             media_type="show", tmdb_id="125988", title="Silo"
@@ -833,6 +1417,88 @@ class TestMonitor:
         assert (await ctx.repos.downloads.get(download_id))["state"] == DownloadState.CANCELLED
         assert (await ctx.repos.wanted.get(wanted_id))["state"] == WantedState.SEARCHING
 
+    async def test_a_missing_pack_reopens_every_episode_it_covered(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        wanted_ids = [
+            await ctx.repos.wanted.upsert(
+                media_id=media_id, season=1, episode=episode,
+                state=WantedState.SEARCHING,
+            )
+            for episode in (1, 2, 3)
+        ]
+        download_id = await ctx.repos.downloads.create(
+            media_id=media_id, wanted_id=wanted_ids[0], display_title="Silo (Season 1)",
+            indexer="Fake", indexer_id="pack", size_bytes=GIB,
+            season=1, is_season_pack=True, state=DownloadState.DOWNLOADING,
+            info_hash="a" * 40, wanted_count=3,
+        )
+        for wanted_id in wanted_ids:
+            await ctx.repos.wanted.set_state(
+                wanted_id, WantedState.GRABBED, reason=f"grabbed #{download_id}"
+            )
+        await monitor.monitor_downloads(ctx)
+        await ctx.db.execute(
+            "UPDATE downloads SET missing_since = datetime('now', '-1 hour') WHERE id = ?",
+            (download_id,),
+        )
+        await monitor.monitor_downloads(ctx)
+        assert (await ctx.repos.downloads.get(download_id))["state"] == DownloadState.CANCELLED
+        assert {
+            (await ctx.repos.wanted.get(wanted_id))["state"] for wanted_id in wanted_ids
+        } == {WantedState.SEARCHING}
+
+        await ctx.repos.wanted.set_state(
+            wanted_ids[0], WantedState.GRABBED, reason="grabbed #999"
+        )
+        assert await queue.retry_download(ctx, download_id) is False
+        assert (await ctx.repos.downloads.get(download_id))["state"] == DownloadState.CANCELLED
+        await ctx.repos.wanted.set_state(
+            wanted_ids[0], WantedState.SEARCHING,
+            reason=f"download #{download_id} was removed",
+        )
+        assert await queue.retry_download(ctx, download_id) is True
+        assert (await ctx.repos.downloads.get(download_id))["state"] == DownloadState.QUEUED
+        assert {
+            (await ctx.repos.wanted.get(wanted_id))["state"] for wanted_id in wanted_ids
+        } == {WantedState.GRABBED}
+
+    async def test_cancelled_retry_refuses_a_want_already_claimed_elsewhere(self, ctx) -> None:
+        download_id, wanted_id = await self._in_flight(ctx)
+        await monitor.monitor_downloads(ctx)
+        await ctx.db.execute(
+            "UPDATE downloads SET missing_since = datetime('now', '-1 hour') WHERE id = ?",
+            (download_id,),
+        )
+        await monitor.monitor_downloads(ctx)
+        await ctx.repos.wanted.set_state(
+            wanted_id, WantedState.GRABBED, reason="grabbed #999"
+        )
+
+        assert await queue.retry_download(ctx, download_id) is False
+        assert (await ctx.repos.downloads.get(download_id))["state"] == DownloadState.CANCELLED
+
+    async def test_legacy_cancelled_single_can_still_be_retried(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        wanted_id = await ctx.repos.wanted.upsert(
+            media_id=media_id, season=1, episode=1,
+            state=WantedState.SEARCHING,
+        )
+        download_id = await ctx.repos.downloads.create(
+            media_id=media_id, wanted_id=wanted_id, display_title="Silo S01E01",
+            indexer="Fake", indexer_id="old", season=1,
+            episode_from=1, episode_to=1, state=DownloadState.CANCELLED,
+        )
+        await ctx.repos.wanted.set_state(
+            wanted_id, WantedState.SEARCHING, reason="download was removed"
+        )
+
+        assert await queue.retry_download(ctx, download_id) is True
+        assert (await ctx.repos.wanted.get(wanted_id))["state"] == WantedState.GRABBED
+
 
 class TestJanitor:
     async def test_watched_films_become_reclaimable(self, ctx) -> None:
@@ -868,6 +1534,39 @@ class TestJanitor:
         await janitor.sync_watched_flags(ctx)
         assert await janitor.cleanup_candidates(ctx) == []
 
+    async def test_multi_season_pack_waits_until_every_included_season_is_watched(
+        self, ctx
+    ) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        download_id = await ctx.repos.downloads.create(
+            media_id=media_id, display_title="Silo (Seasons 1–2)",
+            release_name="Silo S01-S02 2160p WEB-DL-GRP",
+            indexer="F", indexer_id="range", size_bytes=80 * GIB,
+            season=1, is_season_pack=True, state=DownloadState.COMPLETED,
+        )
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="episode", rating_key="1", show_tmdb_id="125988",
+                        season=1, episode=1, watched=True),
+            LibraryItem(kind="episode", rating_key="2", show_tmdb_id="125988",
+                        season=2, episode=1, watched=False),
+        ])
+
+        await janitor.sync_watched_flags(ctx)
+
+        assert (await ctx.repos.downloads.get(download_id))["watched"] == 0
+        assert await janitor.cleanup_candidates(ctx) == []
+
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="episode", rating_key=str(season), show_tmdb_id="125988",
+                        season=season, episode=1, watched=True)
+            for season in (1, 2)
+        ])
+        await janitor.sync_watched_flags(ctx)
+        assert (await ctx.repos.downloads.get(download_id))["watched"] == 1
+        assert len(await janitor.cleanup_candidates(ctx)) == 1
+
     async def test_a_season_pack_retires_the_singles_it_replaces(self, ctx) -> None:
         media_id = await ctx.repos.media.upsert(
             media_type="show", tmdb_id="125988", title="Silo"
@@ -885,6 +1584,59 @@ class TestJanitor:
         assert await janitor.retire_superseded_episodes(ctx, media_id, 1, pack) == 1
         assert (await ctx.repos.downloads.get(single))["archived"] == 1
         assert (await ctx.repos.downloads.get(pack))["archived"] == 0
+
+    async def test_season_range_pack_retires_singles_only_within_its_range(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        singles = {}
+        for season in (1, 2, 3):
+            singles[season] = await ctx.repos.downloads.create(
+                media_id=media_id, display_title=f"Silo (S{season:02d}E01)",
+                indexer="F", indexer_id=str(season), size_bytes=GIB,
+                season=season, episode_from=1, episode_to=1,
+                state=DownloadState.COMPLETED,
+            )
+        await ctx.repos.downloads.create(
+            media_id=media_id, display_title="Silo (Seasons 1–2)",
+            release_name="Silo S01-S02 2160p WEB-DL-GRP",
+            indexer="F", indexer_id="range", size_bytes=80 * GIB,
+            season=1, is_season_pack=True, state=DownloadState.COMPLETED,
+        )
+
+        assert (await janitor.housekeeping(ctx))["superseded_retired"] == 2
+        assert (await ctx.repos.downloads.get(singles[1]))["archived"] == 1
+        assert (await ctx.repos.downloads.get(singles[2]))["archived"] == 1
+        assert (await ctx.repos.downloads.get(singles[3]))["archived"] == 0
+
+    async def test_superseded_single_waits_for_seeding_then_retires(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        single = await ctx.repos.downloads.create(
+            media_id=media_id, display_title="Silo (S01E01)", indexer="F", indexer_id="1",
+            size_bytes=GIB, season=1, episode_from=1, episode_to=1,
+            state=DownloadState.COMPLETED, info_hash="a" * 40,
+        )
+        pack = await ctx.repos.downloads.create(
+            media_id=media_id, display_title="Silo (Season 1)", indexer="F", indexer_id="2",
+            size_bytes=88 * GIB, season=1, is_season_pack=True,
+            state=DownloadState.COMPLETED,
+        )
+        torrent = TorrentStatus(
+            info_hash="a" * 40, name="Silo S01E01", state="stalledUP", progress=1.0,
+            eta_seconds=0, dlspeed=0, size_bytes=GIB, save_path="D:\\Torrents",
+            content_path="", seeding_time=60, ratio=0.5,
+        )
+        ctx.qbt.torrents_list.append(torrent)
+        assert await janitor.retire_superseded_episodes(ctx, media_id, 1, pack) == 0
+        assert (await ctx.repos.downloads.get(single))["archived"] == 0
+        assert ctx.qbt.deleted == []
+
+        torrent.seeding_time = 6 * 86400
+        assert (await janitor.housekeeping(ctx))["superseded_retired"] == 1
+        assert (await ctx.repos.downloads.get(single))["archived"] == 1
+        assert ctx.qbt.deleted == [(["a" * 40], True)]
 
 
 class TestSeedingAwareReclaim:
@@ -932,6 +1684,79 @@ class TestSeedingAwareReclaim:
         assert result["seed_blocked"] is True
         assert ctx.qbt.deleted == []
 
+    async def test_unavailable_client_does_not_claim_the_seed_goal_is_met(self, ctx) -> None:
+        download_id = await self._watched_download(ctx, seeded_seconds=86400)
+
+        class UnavailableQbt(FakeQbt):
+            async def torrents(self, **kwargs):
+                raise ConnectionError("offline")
+
+            async def torrents_by_hash(self, hashes):
+                raise ConnectionError("offline")
+
+        ctx.qbt = UnavailableQbt()
+        candidate = (await janitor.cleanup_candidates(ctx))[0]
+        assert candidate["seed_satisfied"] is False
+        assert candidate["seed_reason"] == "seeding state unavailable"
+
+        result = await janitor.remove_download(
+            ctx, download_id, delete_files=True, respect_seed_goal=True
+        )
+        assert result["seed_blocked"] is True
+        assert (await ctx.repos.downloads.get(download_id))["archived"] == 0
+
+    async def test_unavailable_client_cannot_archive_an_active_torrent(self, ctx) -> None:
+        download_id = await self._watched_download(ctx, seeded_seconds=6 * 86400)
+        ctx.qbt = None
+
+        result = await janitor.remove_download(ctx, download_id, delete_files=True)
+
+        assert result["client_unavailable"] is True
+        assert (await ctx.repos.downloads.get(download_id))["archived"] == 0
+
+    async def test_stale_hash_does_not_claim_files_were_deleted(self, ctx) -> None:
+        download_id = await self._watched_download(ctx, seeded_seconds=6 * 86400)
+        ctx.qbt.torrents_list.clear()
+
+        result = await janitor.remove_download(ctx, download_id, delete_files=True)
+
+        assert result == {"ok": True, "client_removed": False}
+        assert ctx.qbt.deleted == []
+        events = await ctx.repos.events.recent(download_id=download_id)
+        assert events[0]["data"]["freed_bytes"] == 0
+
+    async def test_tagged_torrent_without_stored_hash_obeys_seed_goal(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="movie", tmdb_id="27205", title="Inception"
+        )
+        download_id = await ctx.repos.downloads.create(
+            media_id=media_id, display_title="Inception", indexer="F", indexer_id="1",
+            size_bytes=GIB, state=DownloadState.COMPLETED,
+        )
+        await ctx.repos.downloads.set_watched(download_id, True)
+        torrent = TorrentStatus(
+            info_hash="b" * 40, name="Inception", state="stalledUP", progress=1.0,
+            eta_seconds=0, dlspeed=0, size_bytes=GIB, save_path="D:\\Torrents",
+            content_path="", tags=[f"{ctx.config.policy.torrent_tag_prefix}_{download_id}"],
+            seeding_time=86400,
+        )
+        ctx.qbt.torrents_list.append(torrent)
+
+        candidate = (await janitor.cleanup_candidates(ctx))[0]
+        assert candidate["in_client"] is True
+        assert candidate["seed_satisfied"] is False
+        result = await janitor.remove_download(
+            ctx, download_id, delete_files=True, respect_seed_goal=True
+        )
+        assert result["seed_blocked"] is True
+
+        torrent.seeding_time = 6 * 86400
+        result = await janitor.remove_download(
+            ctx, download_id, delete_files=True, respect_seed_goal=True
+        )
+        assert result["ok"] is True
+        assert ctx.qbt.deleted == [(["b" * 40], True)]
+
     async def test_deleting_after_the_goal_succeeds(self, ctx) -> None:
         download_id = await self._watched_download(ctx, seeded_seconds=6 * 86400)
         result = await janitor.remove_download(
@@ -965,6 +1790,9 @@ class TestSeedingAwareReclaim:
             ctx, download_id, delete_files=True, respect_seed_goal=True
         )
         assert result["ok"] is True
+        assert result["client_removed"] is False
+        events = await ctx.repos.events.recent(download_id=download_id)
+        assert events[0]["data"]["freed_bytes"] == 0
 
 
 class TestStateSnapshot:

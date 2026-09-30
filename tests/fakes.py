@@ -67,6 +67,7 @@ class FakeQbt:
         self.added: list[dict[str, Any]] = []
         self.torrents_list: list[TorrentStatus] = []
         self.deleted: list[tuple[list[str], bool]] = []
+        self.file_adds_never_land = False
         # The real client answers "Ok." to a URL add and then fetches it in the
         # background, so the torrent can never materialise. Set this to model a
         # tracker that will not hand the file over.
@@ -95,6 +96,8 @@ class FakeQbt:
     async def add_torrent_file(self, content: bytes, **kwargs: Any) -> bool:
         summary = bencode.torrent_summary(content)
         self.added.append({"content": content, "info_hash": summary["info_hash"], **kwargs})
+        if self.file_adds_never_land:
+            return True
         self.torrents_list.append(
             TorrentStatus(
                 info_hash=str(summary["info_hash"]),

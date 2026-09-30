@@ -2,6 +2,7 @@
 
 import { api } from './api.js';
 import { closeModal, toast } from './components.js';
+import { icon } from './icons.js';
 import { store } from './store.js';
 import { $, html, relativeTime, setHTML } from './util.js';
 
@@ -40,8 +41,7 @@ async function renderRoute() {
   try {
     await view.render(root);
   } catch (error) {
-    setHTML(root, html`<div class="card"><div class="empty">
-      <span class="empty__icon">⚠</span>${error.message}</div></div>`);
+    setHTML(root, html`<div class="card"><div class="empty">${error.message}</div></div>`);
   }
   root.focus({ preventScroll: true });
   closeRailOnMobile();
@@ -54,7 +54,7 @@ function renderNav() {
       const badge = view.badge?.();
       return html`
         <a class="navlink" href="#/${view.id}" ${active === view.id ? 'aria-current="page"' : ''}>
-          <span class="navlink__icon" aria-hidden="true">${view.icon}</span>
+          <span class="navlink__icon">${icon(view.id)}</span>
           <span class="grow">${view.title}</span>
           ${badge ? html`<span class="navlink__badge">${badge}</span>` : ''}
         </a>`;
@@ -84,7 +84,7 @@ function renderStatus() {
              </span>`
       : ''}
     <span class="pill" title="Watchlist last checked">
-      ⟳ ${relativeTime(store.timestamps.watchlist_checked_at)}
+      Checked ${relativeTime(store.timestamps.watchlist_checked_at)}
     </span>
     <span class="pill ${connectionPill[0]}">
       <span class="pill__dot ${connection === 'live' ? 'pill__dot--live' : ''}"></span>${connectionPill[1]}
@@ -98,13 +98,14 @@ function renderStatus() {
 // ---------------------------------------------------------------------------
 const GLOBAL_ACTIONS = {
   async approve(target) {
-    await api.approve([Number(target.dataset.id)]);
-    toast('Approved — it will start on the next queue pass', 'ok');
+    const result = await api.approve([Number(target.dataset.id)]);
+    toast(result.approved ? 'Approved — it will start on the next queue pass'
+                          : 'This approval was already handled', result.approved ? 'ok' : '');
     store.refresh();
   },
   async deny(target) {
-    await api.deny([Number(target.dataset.id)]);
-    toast('Denied and blocklisted');
+    const result = await api.deny([Number(target.dataset.id)]);
+    toast(result.denied ? 'Denied and blocklisted' : 'This approval was already handled');
     store.refresh();
   },
   async retry(target) {
@@ -169,14 +170,28 @@ $('#theme-toggle').addEventListener('click', () => {
   toast(`Theme: ${next}`);
 });
 
-$('#menu-toggle').addEventListener('click', () => {
+function setRailOpen(open, focusSelector) {
   const rail = $('#rail');
-  rail.dataset.open = rail.dataset.open === 'true' ? 'false' : 'true';
+  rail.dataset.open = String(open);
+  $('#menu-toggle').setAttribute('aria-expanded', String(open));
+  if (focusSelector) $(focusSelector).focus();
+}
+
+$('#menu-toggle').addEventListener('click', () => {
+  const open = $('#rail').dataset.open !== 'true';
+  setRailOpen(open, open ? '#rail-close' : '#menu-toggle');
+});
+$('#rail-close').addEventListener('click', () => setRailOpen(false, '#menu-toggle'));
+$('#rail-scrim').addEventListener('click', () => setRailOpen(false, '#menu-toggle'));
+$('#nav').addEventListener('click', (event) => {
+  if (event.target.closest('a')) setRailOpen(false, '#view');
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && $('#rail').dataset.open === 'true') setRailOpen(false, '#menu-toggle');
 });
 
 function closeRailOnMobile() {
-  const rail = $('#rail');
-  if (window.matchMedia('(max-width: 820px)').matches) rail.dataset.open = 'false';
+  if (window.matchMedia('(max-width: 820px)').matches) setRailOpen(false);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,627 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-28T17:50:19.480625Z",
+  "title": "Design System: rás",
+  "extensions": {
+    "colorMeta": {
+      "petrol-wall": {
+        "role": "neutral",
+        "displayName": "Petrol Wall",
+        "tonalRamp": [
+          "oklch(15% 0.027 216.7)",
+          "oklch(26% 0.027 216.7)",
+          "oklch(37% 0.027 216.7)",
+          "oklch(48% 0.027 216.7)",
+          "oklch(59% 0.027 216.7)",
+          "oklch(70% 0.027 216.7)",
+          "oklch(82% 0.027 216.7)",
+          "oklch(95% 0.027 216.7)"
+        ]
+      },
+      "petrol-panel": {
+        "role": "neutral",
+        "displayName": "Petrol Panel",
+        "tonalRamp": [
+          "oklch(15% 0.031 216.4)",
+          "oklch(26% 0.031 216.4)",
+          "oklch(37% 0.031 216.4)",
+          "oklch(48% 0.031 216.4)",
+          "oklch(59% 0.031 216.4)",
+          "oklch(70% 0.031 216.4)",
+          "oklch(82% 0.031 216.4)",
+          "oklch(95% 0.031 216.4)"
+        ]
+      },
+      "petrol-recess": {
+        "role": "neutral",
+        "displayName": "Petrol Recess",
+        "tonalRamp": [
+          "oklch(15% 0.024 220.1)",
+          "oklch(26% 0.024 220.1)",
+          "oklch(37% 0.024 220.1)",
+          "oklch(48% 0.024 220.1)",
+          "oklch(59% 0.024 220.1)",
+          "oklch(70% 0.024 220.1)",
+          "oklch(82% 0.024 220.1)",
+          "oklch(95% 0.024 220.1)"
+        ]
+      },
+      "petrol-hover": {
+        "role": "neutral",
+        "displayName": "Petrol Hover",
+        "tonalRamp": [
+          "oklch(15% 0.033 217.3)",
+          "oklch(26% 0.033 217.3)",
+          "oklch(37% 0.033 217.3)",
+          "oklch(48% 0.033 217.3)",
+          "oklch(59% 0.033 217.3)",
+          "oklch(70% 0.033 217.3)",
+          "oklch(82% 0.033 217.3)",
+          "oklch(95% 0.033 217.3)"
+        ]
+      },
+      "petrol-surface": {
+        "role": "neutral",
+        "displayName": "Petrol Surface",
+        "tonalRamp": [
+          "oklch(15% 0.032 218.3)",
+          "oklch(26% 0.032 218.3)",
+          "oklch(37% 0.032 218.3)",
+          "oklch(48% 0.032 218.3)",
+          "oklch(59% 0.032 218.3)",
+          "oklch(70% 0.032 218.3)",
+          "oklch(82% 0.032 218.3)",
+          "oklch(95% 0.032 218.3)"
+        ]
+      },
+      "ivory-text": {
+        "role": "neutral",
+        "displayName": "Ivory Text",
+        "tonalRamp": [
+          "oklch(15% 0.016 86.4)",
+          "oklch(26% 0.016 86.4)",
+          "oklch(37% 0.016 86.4)",
+          "oklch(48% 0.016 86.4)",
+          "oklch(59% 0.016 86.4)",
+          "oklch(70% 0.016 86.4)",
+          "oklch(82% 0.016 86.4)",
+          "oklch(95% 0.016 86.4)"
+        ]
+      },
+      "mist-text": {
+        "role": "neutral",
+        "displayName": "Mist Text",
+        "tonalRamp": [
+          "oklch(15% 0.018 174.0)",
+          "oklch(26% 0.018 174.0)",
+          "oklch(37% 0.018 174.0)",
+          "oklch(48% 0.018 174.0)",
+          "oklch(59% 0.018 174.0)",
+          "oklch(70% 0.018 174.0)",
+          "oklch(82% 0.018 174.0)",
+          "oklch(95% 0.018 174.0)"
+        ]
+      },
+      "quiet-text": {
+        "role": "neutral",
+        "displayName": "Quiet Text",
+        "tonalRamp": [
+          "oklch(15% 0.024 179.8)",
+          "oklch(26% 0.024 179.8)",
+          "oklch(37% 0.024 179.8)",
+          "oklch(48% 0.024 179.8)",
+          "oklch(59% 0.024 179.8)",
+          "oklch(70% 0.024 179.8)",
+          "oklch(82% 0.024 179.8)",
+          "oklch(95% 0.024 179.8)"
+        ]
+      },
+      "amber-action": {
+        "role": "primary",
+        "displayName": "Amber Action",
+        "tonalRamp": [
+          "oklch(15% 0.112 76.1)",
+          "oklch(26% 0.112 76.1)",
+          "oklch(37% 0.112 76.1)",
+          "oklch(48% 0.112 76.1)",
+          "oklch(59% 0.112 76.1)",
+          "oklch(70% 0.112 76.1)",
+          "oklch(82% 0.112 76.1)",
+          "oklch(95% 0.112 76.1)"
+        ]
+      },
+      "amber-ink": {
+        "role": "neutral",
+        "displayName": "Amber Ink",
+        "tonalRamp": [
+          "oklch(15% 0.021 211.4)",
+          "oklch(26% 0.021 211.4)",
+          "oklch(37% 0.021 211.4)",
+          "oklch(48% 0.021 211.4)",
+          "oklch(59% 0.021 211.4)",
+          "oklch(70% 0.021 211.4)",
+          "oklch(82% 0.021 211.4)",
+          "oklch(95% 0.021 211.4)"
+        ]
+      },
+      "sea-glass": {
+        "role": "secondary",
+        "displayName": "Sea Glass",
+        "tonalRamp": [
+          "oklch(15% 0.041 182.5)",
+          "oklch(26% 0.041 182.5)",
+          "oklch(37% 0.041 182.5)",
+          "oklch(48% 0.041 182.5)",
+          "oklch(59% 0.041 182.5)",
+          "oklch(70% 0.041 182.5)",
+          "oklch(82% 0.041 182.5)",
+          "oklch(95% 0.041 182.5)"
+        ]
+      },
+      "sea-glass-success": {
+        "role": "secondary",
+        "displayName": "Sea Glass Success",
+        "tonalRamp": [
+          "oklch(15% 0.066 157.7)",
+          "oklch(26% 0.066 157.7)",
+          "oklch(37% 0.066 157.7)",
+          "oklch(48% 0.066 157.7)",
+          "oklch(59% 0.066 157.7)",
+          "oklch(70% 0.066 157.7)",
+          "oklch(82% 0.066 157.7)",
+          "oklch(95% 0.066 157.7)"
+        ]
+      },
+      "amber-warning": {
+        "role": "primary",
+        "displayName": "Amber Warning",
+        "tonalRamp": [
+          "oklch(15% 0.107 79.6)",
+          "oklch(26% 0.107 79.6)",
+          "oklch(37% 0.107 79.6)",
+          "oklch(48% 0.107 79.6)",
+          "oklch(59% 0.107 79.6)",
+          "oklch(70% 0.107 79.6)",
+          "oklch(82% 0.107 79.6)",
+          "oklch(95% 0.107 79.6)"
+        ]
+      },
+      "coral-error": {
+        "role": "tertiary",
+        "displayName": "Coral Error",
+        "tonalRamp": [
+          "oklch(15% 0.106 26.7)",
+          "oklch(26% 0.106 26.7)",
+          "oklch(37% 0.106 26.7)",
+          "oklch(48% 0.106 26.7)",
+          "oklch(59% 0.106 26.7)",
+          "oklch(70% 0.106 26.7)",
+          "oklch(82% 0.106 26.7)",
+          "oklch(95% 0.106 26.7)"
+        ]
+      },
+      "lightbox-paper": {
+        "role": "neutral",
+        "displayName": "Lightbox Paper",
+        "tonalRamp": [
+          "oklch(15% 0.021 88.7)",
+          "oklch(26% 0.021 88.7)",
+          "oklch(37% 0.021 88.7)",
+          "oklch(48% 0.021 88.7)",
+          "oklch(59% 0.021 88.7)",
+          "oklch(70% 0.021 88.7)",
+          "oklch(82% 0.021 88.7)",
+          "oklch(95% 0.021 88.7)"
+        ]
+      },
+      "lightbox-ink": {
+        "role": "neutral",
+        "displayName": "Lightbox Ink",
+        "tonalRamp": [
+          "oklch(15% 0.033 215.1)",
+          "oklch(26% 0.033 215.1)",
+          "oklch(37% 0.033 215.1)",
+          "oklch(48% 0.033 215.1)",
+          "oklch(59% 0.033 215.1)",
+          "oklch(70% 0.033 215.1)",
+          "oklch(82% 0.033 215.1)",
+          "oklch(95% 0.033 215.1)"
+        ]
+      },
+      "lightbox-muted": {
+        "role": "neutral",
+        "displayName": "Lightbox Muted",
+        "tonalRamp": [
+          "oklch(15% 0.022 180.4)",
+          "oklch(26% 0.022 180.4)",
+          "oklch(37% 0.022 180.4)",
+          "oklch(48% 0.022 180.4)",
+          "oklch(59% 0.022 180.4)",
+          "oklch(70% 0.022 180.4)",
+          "oklch(82% 0.022 180.4)",
+          "oklch(95% 0.022 180.4)"
+        ]
+      },
+      "lightbox-rule": {
+        "role": "neutral",
+        "displayName": "Lightbox Rule",
+        "tonalRamp": [
+          "oklch(15% 0.023 112.3)",
+          "oklch(26% 0.023 112.3)",
+          "oklch(37% 0.023 112.3)",
+          "oklch(48% 0.023 112.3)",
+          "oklch(59% 0.023 112.3)",
+          "oklch(70% 0.023 112.3)",
+          "oklch(82% 0.023 112.3)",
+          "oklch(95% 0.023 112.3)"
+        ]
+      },
+      "date-amber": {
+        "role": "primary",
+        "displayName": "Date Amber",
+        "tonalRamp": [
+          "oklch(15% 0.101 61.3)",
+          "oklch(26% 0.101 61.3)",
+          "oklch(37% 0.101 61.3)",
+          "oklch(48% 0.101 61.3)",
+          "oklch(59% 0.101 61.3)",
+          "oklch(70% 0.101 61.3)",
+          "oklch(82% 0.101 61.3)",
+          "oklch(95% 0.101 61.3)"
+        ]
+      },
+      "daylight-wall": {
+        "role": "neutral",
+        "displayName": "Daylight Wall",
+        "tonalRamp": [
+          "oklch(15% 0.014 97.5)",
+          "oklch(26% 0.014 97.5)",
+          "oklch(37% 0.014 97.5)",
+          "oklch(48% 0.014 97.5)",
+          "oklch(59% 0.014 97.5)",
+          "oklch(70% 0.014 97.5)",
+          "oklch(82% 0.014 97.5)",
+          "oklch(95% 0.014 97.5)"
+        ]
+      },
+      "daylight-panel": {
+        "role": "neutral",
+        "displayName": "Daylight Panel",
+        "tonalRamp": [
+          "oklch(15% 0.010 87.5)",
+          "oklch(26% 0.010 87.5)",
+          "oklch(37% 0.010 87.5)",
+          "oklch(48% 0.010 87.5)",
+          "oklch(59% 0.010 87.5)",
+          "oklch(70% 0.010 87.5)",
+          "oklch(82% 0.010 87.5)",
+          "oklch(95% 0.010 87.5)"
+        ]
+      },
+      "daylight-recess": {
+        "role": "neutral",
+        "displayName": "Daylight Recess",
+        "tonalRamp": [
+          "oklch(15% 0.016 110.6)",
+          "oklch(26% 0.016 110.6)",
+          "oklch(37% 0.016 110.6)",
+          "oklch(48% 0.016 110.6)",
+          "oklch(59% 0.016 110.6)",
+          "oklch(70% 0.016 110.6)",
+          "oklch(82% 0.016 110.6)",
+          "oklch(95% 0.016 110.6)"
+        ]
+      },
+      "daylight-text": {
+        "role": "neutral",
+        "displayName": "Daylight Text",
+        "tonalRamp": [
+          "oklch(15% 0.033 211.4)",
+          "oklch(26% 0.033 211.4)",
+          "oklch(37% 0.033 211.4)",
+          "oklch(48% 0.033 211.4)",
+          "oklch(59% 0.033 211.4)",
+          "oklch(70% 0.033 211.4)",
+          "oklch(82% 0.033 211.4)",
+          "oklch(95% 0.033 211.4)"
+        ]
+      },
+      "daylight-muted": {
+        "role": "neutral",
+        "displayName": "Daylight Muted",
+        "tonalRamp": [
+          "oklch(15% 0.031 196.1)",
+          "oklch(26% 0.031 196.1)",
+          "oklch(37% 0.031 196.1)",
+          "oklch(48% 0.031 196.1)",
+          "oklch(59% 0.031 196.1)",
+          "oklch(70% 0.031 196.1)",
+          "oklch(82% 0.031 196.1)",
+          "oklch(95% 0.031 196.1)"
+        ]
+      },
+      "daylight-amber": {
+        "role": "primary",
+        "displayName": "Daylight Amber",
+        "tonalRamp": [
+          "oklch(15% 0.093 64.7)",
+          "oklch(26% 0.093 64.7)",
+          "oklch(37% 0.093 64.7)",
+          "oklch(48% 0.093 64.7)",
+          "oklch(59% 0.093 64.7)",
+          "oklch(70% 0.093 64.7)",
+          "oklch(82% 0.093 64.7)",
+          "oklch(95% 0.093 64.7)"
+        ]
+      },
+      "daylight-sea-glass": {
+        "role": "secondary",
+        "displayName": "Daylight Sea Glass",
+        "tonalRamp": [
+          "oklch(15% 0.047 187.7)",
+          "oklch(26% 0.047 187.7)",
+          "oklch(37% 0.047 187.7)",
+          "oklch(48% 0.047 187.7)",
+          "oklch(59% 0.047 187.7)",
+          "oklch(70% 0.047 187.7)",
+          "oklch(82% 0.047 187.7)",
+          "oklch(95% 0.047 187.7)"
+        ]
+      },
+      "daylight-success": {
+        "role": "secondary",
+        "displayName": "Daylight Success",
+        "tonalRamp": [
+          "oklch(15% 0.062 166.6)",
+          "oklch(26% 0.062 166.6)",
+          "oklch(37% 0.062 166.6)",
+          "oklch(48% 0.062 166.6)",
+          "oklch(59% 0.062 166.6)",
+          "oklch(70% 0.062 166.6)",
+          "oklch(82% 0.062 166.6)",
+          "oklch(95% 0.062 166.6)"
+        ]
+      },
+      "daylight-error": {
+        "role": "tertiary",
+        "displayName": "Daylight Error",
+        "tonalRamp": [
+          "oklch(15% 0.134 26.5)",
+          "oklch(26% 0.134 26.5)",
+          "oklch(37% 0.134 26.5)",
+          "oklch(48% 0.134 26.5)",
+          "oklch(59% 0.134 26.5)",
+          "oklch(70% 0.134 26.5)",
+          "oklch(82% 0.134 26.5)",
+          "oklch(95% 0.134 26.5)"
+        ]
+      },
+      "daylight-lightbox-paper": {
+        "role": "neutral",
+        "displayName": "Daylight Lightbox Paper",
+        "tonalRamp": [
+          "oklch(15% 0.015 86)",
+          "oklch(26% 0.015 86)",
+          "oklch(37% 0.015 86)",
+          "oklch(48% 0.015 86)",
+          "oklch(59% 0.015 86)",
+          "oklch(70% 0.015 86)",
+          "oklch(82% 0.015 86)",
+          "oklch(95% 0.015 86)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Showtime heading and date-led display."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Page title."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Panel and item headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Descriptions and control context."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Plainly named actions."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Times, logs, and technical facts."
+      }
+    },
+    "shadows": [
+      {
+        "name": "operational-rest",
+        "value": "none",
+        "purpose": "Flat cards and rows."
+      },
+      {
+        "name": "showtime-rest",
+        "value": "0 18px 36px -30px #000a",
+        "purpose": "Subtle depth below ivory listings."
+      },
+      {
+        "name": "showtime-hover",
+        "value": "0 24px 46px -28px #0009",
+        "purpose": "Feature listing hover."
+      },
+      {
+        "name": "overlay",
+        "value": "0 22px 48px -22px #000a",
+        "purpose": "Modal, toast, and open mobile rail in dark theme."
+      },
+      {
+        "name": "overlay-light",
+        "value": "0 22px 48px -22px #142b3045",
+        "purpose": "Modal, toast, and open mobile rail in light theme."
+      }
+    ],
+    "motion": [
+      {
+        "name": "standard-ease",
+        "value": "cubic-bezier(.2, .8, .2, 1)",
+        "purpose": "Control and surface transitions."
+      },
+      {
+        "name": "standard-duration",
+        "value": ".24s",
+        "purpose": "Hover and state changes."
+      },
+      {
+        "name": "calendar-detail-reveal",
+        "value": ".36s",
+        "purpose": "One calendar day-detail reveal; reduced motion collapses it."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "ultrawide",
+        "value": "1800px"
+      },
+      {
+        "name": "schedule-stack",
+        "value": "1160px"
+      },
+      {
+        "name": "split-stack",
+        "value": "1080px"
+      },
+      {
+        "name": "calendar-compact",
+        "value": "900px"
+      },
+      {
+        "name": "rail-drawer",
+        "value": "820px"
+      },
+      {
+        "name": "small-screen",
+        "value": "560px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Amber decision or primary action.",
+      "html": "<button class=\"ds-btn-primary\">Open Calendar</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;min-height:40px;padding:9px 22px;border:1px solid var(--accent,#e0ad60);border-radius:4px;background:var(--accent,#e0ad60);color:var(--accent-ink,#18272a);font:600 14px \"Segoe UI\",sans-serif;cursor:pointer;transition:filter .24s cubic-bezier(.2,.8,.2,1)}.ds-btn-primary:hover{filter:brightness(1.08)}.ds-btn-primary:focus-visible{outline:2px solid var(--accent,#e0ad60);outline-offset:3px}.ds-btn-primary:active{filter:brightness(.94)}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Bordered control for supporting actions.",
+      "html": "<button class=\"ds-btn-secondary\">Details</button>",
+      "css": ".ds-btn-secondary{display:inline-flex;align-items:center;min-height:40px;padding:9px 16px;border:1px solid var(--border-strong,#dbe5dd55);border-radius:4px;background:transparent;color:var(--text,#f5f0e5);font:600 14px \"Segoe UI\",sans-serif;cursor:pointer;transition:background-color .24s cubic-bezier(.2,.8,.2,1)}.ds-btn-secondary:hover{background:var(--bg-hover,#284148)}.ds-btn-secondary:focus-visible{outline:2px solid var(--accent,#e0ad60);outline-offset:3px}.ds-btn-secondary:active{background:var(--surface,#213940)}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Explicit destructive action.",
+      "html": "<button class=\"ds-btn-danger\">Remove file</button>",
+      "css": ".ds-btn-danger{display:inline-flex;align-items:center;min-height:40px;padding:9px 16px;border:1px solid var(--err,#ffa79d);border-radius:4px;background:transparent;color:var(--err,#ffa79d);font:600 14px \"Segoe UI\",sans-serif;cursor:pointer;transition:background-color .24s cubic-bezier(.2,.8,.2,1)}.ds-btn-danger:hover{background:var(--err-soft,#ffa79d24)}.ds-btn-danger:focus-visible{outline:2px solid var(--err,#ffa79d);outline-offset:3px}.ds-btn-danger:active{background:var(--err-soft,#ffa79d24)}"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Raised field for settings or filters.",
+      "html": "<label class=\"ds-field\">Search titles<input class=\"ds-input\" type=\"text\" placeholder=\"Title\"></label>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:6px;color:var(--text,#f5f0e5);font:400 14px \"Segoe UI\",sans-serif}.ds-input{padding:9px 12px;border:1px solid var(--border-strong,#dbe5dd55);border-radius:4px;background:var(--bg-elevated,#193036);color:var(--text,#f5f0e5);font:400 15px \"Segoe UI\",sans-serif}.ds-input:focus-visible{outline:2px solid var(--accent,#e0ad60);outline-offset:3px;border-color:var(--text,#f5f0e5)}"
+    },
+    {
+      "name": "Rail Link",
+      "kind": "nav",
+      "description": "Compact route link with amber current state.",
+      "html": "<nav class=\"ds-rail\"><a class=\"ds-rail-link\" aria-current=\"page\" href=\"#/dashboard\">Dashboard</a><a class=\"ds-rail-link\" href=\"#/calendar\">Calendar</a></nav>",
+      "css": ".ds-rail{display:grid;gap:1px;padding:10px;background:var(--bg-sunken,#0c1c21)}.ds-rail-link{padding:12px 10px;border-radius:4px;color:var(--text-dim,#c2d1cc);font:500 14px \"Segoe UI\",sans-serif;text-decoration:none;transition:background-color .24s cubic-bezier(.2,.8,.2,1),color .24s cubic-bezier(.2,.8,.2,1)}.ds-rail-link:hover{background:var(--bg-hover,#284148);color:var(--text,#f5f0e5)}.ds-rail-link[aria-current=\"page\"]{background:var(--accent,#e0ad60);color:var(--accent-ink,#18272a)}.ds-rail-link:focus-visible{outline:2px solid var(--accent,#e0ad60);outline-offset:3px}"
+    },
+    {
+      "name": "Selected Chip",
+      "kind": "chip",
+      "refersTo": "chip-selected",
+      "description": "Pressed filter with readable state.",
+      "html": "<button class=\"ds-chip\" aria-pressed=\"true\">Month</button>",
+      "css": ".ds-chip{min-height:40px;padding:6px 14px;border:1px solid var(--accent,#e0ad60);border-radius:999px;background:var(--accent,#e0ad60);color:var(--accent-ink,#18272a);font:400 14px \"Segoe UI\",sans-serif;cursor:pointer;transition:filter .24s cubic-bezier(.2,.8,.2,1)}.ds-chip:hover{filter:brightness(1.08)}.ds-chip:focus-visible{outline:2px solid var(--accent,#e0ad60);outline-offset:3px}.ds-chip:active{filter:brightness(.94)}"
+    },
+    {
+      "name": "Operational Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Flat raised panel with ruled heading.",
+      "html": "<section class=\"ds-card\"><h2 class=\"ds-card-head\">Ready when you are</h2><div class=\"ds-card-body\">A following season can wait until the household chooses to start it.</div></section>",
+      "css": ".ds-card{overflow:hidden;border:1px solid var(--border,#dbe5dd2b);border-radius:10px;background:var(--bg-elevated,#193036);color:var(--text,#f5f0e5)}.ds-card-head{margin:0;padding:16px 18px;border-bottom:1px solid var(--border,#dbe5dd2b);font:500 22px/1 \"Barlow Condensed\",\"Arial Narrow\",sans-serif}.ds-card-body{padding:18px;font:400 15px/1.5 \"Segoe UI\",sans-serif}.ds-card:focus-within{outline:2px solid var(--accent,#e0ad60);outline-offset:3px}"
+    },
+    {
+      "name": "Showtime Listing",
+      "kind": "custom",
+      "refersTo": "schedule-panel",
+      "description": "Ivory dated listing that opens Calendar detail.",
+      "html": "<a class=\"ds-showtime\" href=\"#/calendar\"><strong class=\"ds-showtime-date\">27</strong><span class=\"ds-showtime-copy\"><strong>Upcoming release</strong><small>September · Open Calendar</small></span><span aria-hidden=\"true\">›</span></a>",
+      "css": ".ds-showtime{display:grid;grid-template-columns:50px minmax(0,1fr) 16px;align-items:center;gap:18px;min-height:69px;padding:9px 18px;border:1px solid #c7c9b8;border-radius:10px;background:#f1ebdc;color:#173036;text-decoration:none;transition:transform .24s cubic-bezier(.2,.8,.2,1)}.ds-showtime:hover{transform:translateY(-2px);color:#89571e}.ds-showtime:focus-visible{outline:2px solid #9b622c;outline-offset:3px}.ds-showtime-date{font:500 37px/.85 \"Barlow Condensed\",\"Arial Narrow\",sans-serif;color:#9b622c}.ds-showtime-copy{display:grid;gap:3px;font:600 14px \"Segoe UI\",sans-serif}.ds-showtime-copy small{color:#5b6d69;font-size:12px;font-weight:400}"
+    },
+    {
+      "name": "Status Pill",
+      "kind": "chip",
+      "description": "Quiet, labeled healthy state.",
+      "html": "<span class=\"ds-pill\"><span class=\"ds-pill-dot\" aria-hidden=\"true\"></span>Connected</span>",
+      "css": ".ds-pill{display:inline-flex;align-items:center;gap:7px;padding:3px 11px;border-radius:999px;background:var(--ok-soft,#a3d4b621);color:var(--ok,#a3d4b6);font:400 13px \"Segoe UI\",sans-serif}.ds-pill-dot{width:6px;height:6px;border-radius:50%;background:currentColor}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Living Showtime Board",
+    "overview": "rás gives a shared household an at-a-glance view of upcoming media and live operations. The interface borrows the materials of a cinema foyer: a deep petrol wall behind luminous ivory listings, deliberate amber date and action accents, and quiet sea glass status. The result is a practical control room with an editorial showtime rhythm.\n\nThe design repeats that rhythm across navigation, schedule listings, calendar cells, queue rows, and forms. Poster artwork retains its own color. Information stays dense and legible, with rules and tonal surfaces doing most of the grouping. The established three-stream mark and `rás` wordmark anchor the rail.",
+    "keyCharacteristics": [
+      "The schedule is the brightest material; operational panels sit on petrol tones.",
+      "Condensed display type gives dates and titles an immediate reading order; plain sans-serif carries controls and explanations.",
+      "Amber identifies dates and selected actions, while status colors retain their own meanings.",
+      "The month calendar, agenda, waiting shelf, and explicit operational controls share one visual language."
+    ],
+    "rules": [
+      {
+        "name": "The Material Boundary Rule",
+        "body": "Use the ivory lightbox for schedule reading; use petrol surfaces and their light-theme counterparts for operational controls.",
+        "section": "colors"
+      },
+      {
+        "name": "The Status Meaning Rule",
+        "body": "Amber can draw attention to a date or decision, but success, warning, and failure keep distinct colors and labels.",
+        "section": "colors"
+      },
+      {
+        "name": "The Numbers Lead Rule",
+        "body": "Release dates and status counts use condensed type and tabular numerals; supporting facts stay smaller and quieter.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Operations Rule",
+        "body": "Keep ordinary monitoring surfaces flat and ruled; reserve lift for the schedule feature and temporary overlays.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** lead with the next useful release or household decision and show its context before an action.",
+      "**Do** keep the ivory schedule, petrol operational surfaces, amber dates, and sea glass status in their established roles.",
+      "**Do** preserve poster colors, the rás mark, visible focus, and reduced-motion behavior.",
+      "**Do** distinguish a waiting continuation from a failure through both language and status treatment."
+    ],
+    "donts": [
+      "**Don't** turn the waiting shelf into an urgent task backlog.",
+      "**Don't** use amber alone to communicate an error or a healthy state.",
+      "**Don't** make calendar cells, tables, and dense rows look like detached floating cards.",
+      "**Don't** hide download-starting or file-removing actions behind unlabeled icons."
+    ]
+  }
+}

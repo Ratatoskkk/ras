@@ -210,4 +210,26 @@ _migration(
     """,
 )
 
+_migration(
+    5,
+    "wanted_first_search_at",
+    """
+    ALTER TABLE wanted ADD COLUMN first_search_at TEXT;
+    UPDATE wanted SET first_search_at = last_search_at
+        WHERE search_attempts > 0 AND last_search_at IS NOT NULL;
+    """,
+)
+
+_migration(
+    6,
+    "download_wanted_count",
+    """
+    ALTER TABLE downloads ADD COLUMN wanted_count INTEGER NOT NULL DEFAULT 0;
+    UPDATE downloads SET wanted_count = (
+        SELECT COUNT(*) FROM wanted
+        WHERE wanted.reason = 'grabbed #' || downloads.id
+    );
+    """,
+)
+
 SCHEMA_VERSION = max(v for v, _, _ in MIGRATIONS)

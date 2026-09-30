@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import sqlite3
+from datetime import date, timedelta
+
+from conduit.db.database import Database
+from conduit.db.schema import MIGRATIONS
 from conduit.domain.models import DownloadState, LibraryItem, WantedState
 
 
@@ -42,14 +47,29 @@ class TestWanted:
         assert again == wanted_id
         assert (await repos.wanted.get(wanted_id))["state"] == WantedState.GRABBED
 
-    async def test_upsert_revives_something_we_gave_up_on(self, repos) -> None:
+    async def test_calendar_upsert_preserves_slow_search_state(self, repos) -> None:
         media_id = await seed_show(repos)
         wanted_id = await repos.wanted.upsert(media_id=media_id, season=1, episode=1)
         await repos.wanted.set_state(wanted_id, WantedState.UNAVAILABLE)
         await repos.wanted.upsert(
             media_id=media_id, season=1, episode=1, state=WantedState.SEARCHING
         )
-        assert (await repos.wanted.get(wanted_id))["state"] == WantedState.SEARCHING
+        assert (await repos.wanted.get(wanted_id))["state"] == WantedState.UNAVAILABLE
+
+    async def test_search_miss_does_not_reopen_a_settled_want(self, repos) -> None:
+        media_id = await seed_show(repos)
+        wanted_id = await repos.wanted.upsert(media_id=media_id, season=1, episode=1)
+
+        assert await repos.wanted.record_search_miss(wanted_id, "nothing found") is True
+        waiting = await repos.wanted.get(wanted_id)
+        assert waiting["state"] == WantedState.WAITING
+        assert waiting["search_attempts"] == 1
+
+        await repos.wanted.set_state(wanted_id, WantedState.GRABBED)
+        assert await repos.wanted.record_search_miss(wanted_id, "stale result") is False
+        grabbed = await repos.wanted.get(wanted_id)
+        assert grabbed["state"] == WantedState.GRABBED
+        assert grabbed["search_attempts"] == 1
 
     async def test_upsert_revives_a_want_a_policy_stood_down(self, repos) -> None:
         """Widening the backlog policy must not be a one-way door."""
@@ -150,6 +170,59 @@ class TestWanted:
         assert states[1] == WantedState.SEARCHING
         assert states[9] == WantedState.WAITING
 
+    async def test_future_episode_does_not_spend_search_attempts(self, repos) -> None:
+        media_id = await seed_show(repos)
+        future = (date.today() + timedelta(days=14)).isoformat()
+        wanted_id = await repos.wanted.upsert(
+            media_id=media_id, season=2, episode=5, air_date=future,
+            state=WantedState.SEARCHING,
+        )
+        await repos.wanted.record_search_miss(wanted_id, "not out yet")
+        assert await repos.wanted.due_for_search() == []
+
+        await repos.wanted.upsert(
+            media_id=media_id, season=2, episode=5, air_date=future,
+            state=WantedState.WAITING,
+        )
+        row = await repos.wanted.get(wanted_id)
+        assert row["state"] == WantedState.WAITING
+        assert row["search_attempts"] == 0
+        assert row["first_search_at"] is None
+        assert row["last_search_at"] is None
+
+    async def test_unavailable_episode_keeps_daily_follow_up_indefinitely(self, repos) -> None:
+        media_id = await seed_show(repos)
+        aired = (date.today() - timedelta(days=10)).isoformat()
+        wanted_id = await repos.wanted.upsert(
+            media_id=media_id, season=2, episode=4, air_date=aired,
+            state=WantedState.SEARCHING,
+        )
+        await repos.wanted.record_search_miss(wanted_id, "nothing found")
+        await repos.wanted.set_state(wanted_id, WantedState.UNAVAILABLE)
+        await repos.wanted.db.execute(
+            "UPDATE wanted SET first_search_at=datetime('now','-10 days'), "
+            "last_search_at=datetime('now','-2 days') WHERE id=?", (wanted_id,)
+        )
+        assert [row["id"] for row in await repos.wanted.due_for_search()] == [wanted_id]
+        assert (await repos.wanted.counts_by_media())[media_id]["outstanding"] == 1
+
+        await repos.wanted.db.execute(
+            "UPDATE wanted SET last_search_at=datetime('now') WHERE id=?", (wanted_id,)
+        )
+        assert await repos.wanted.due_for_search() == []
+
+        await repos.wanted.db.execute(
+            "UPDATE wanted SET first_search_at=datetime('now','-200 days'), "
+            "last_search_at=datetime('now','-2 days') WHERE id=?", (wanted_id,)
+        )
+        assert [row["id"] for row in await repos.wanted.due_for_search()] == [wanted_id]
+
+        await repos.wanted.db.execute(
+            "UPDATE wanted SET first_search_at=NULL, last_search_at=NULL WHERE id=?",
+            (wanted_id,),
+        )
+        assert [row["id"] for row in await repos.wanted.due_for_search()] == [wanted_id]
+
     async def test_never_searched_items_are_not_expired(self, repos) -> None:
         """A newly followed series' back catalogue must get a chance first."""
         media_id = await seed_show(repos)
@@ -158,6 +231,22 @@ class TestWanted:
             state=WantedState.SEARCHING,
         )
         assert await repos.wanted.expire_stale(tv_days=45, movie_days=180) == 0
+        assert (await repos.wanted.get(wanted_id))["state"] == WantedState.SEARCHING
+
+    async def test_expiry_clock_starts_with_the_first_search(self, repos) -> None:
+        media_id = await seed_show(repos)
+        wanted_id = await repos.wanted.upsert(
+            media_id=media_id, season=1, episode=1, state=WantedState.SEARCHING
+        )
+        await repos.db.execute(
+            "UPDATE wanted SET created_at = datetime('now', '-60 days') WHERE id = ?",
+            (wanted_id,),
+        )
+        await repos.wanted.set_state(
+            wanted_id, WantedState.SEARCHING, reason="no release", bump_attempt=True
+        )
+
+        assert await repos.wanted.expire_stale(45, 180) == 0
         assert (await repos.wanted.get(wanted_id))["state"] == WantedState.SEARCHING
 
     async def test_expires_after_enough_failed_attempts(self, repos) -> None:
@@ -170,8 +259,27 @@ class TestWanted:
             await repos.wanted.set_state(
                 wanted_id, WantedState.SEARCHING, reason="nothing", bump_attempt=True
             )
+        assert await repos.wanted.expire_stale(45, 180, max_attempts=3) == 0
+        await repos.wanted.db.execute(
+            "UPDATE wanted SET first_search_at=datetime('now','-8 days') WHERE id=?",
+            (wanted_id,),
+        )
         assert await repos.wanted.expire_stale(45, 180, max_attempts=3) == 1
         assert (await repos.wanted.get(wanted_id))["state"] == WantedState.UNAVAILABLE
+
+    async def test_fresh_release_is_not_retired_after_many_fast_polls(self, repos) -> None:
+        media_id = await seed_show(repos)
+        aired = (date.today() - timedelta(days=1)).isoformat()
+        wanted_id = await repos.wanted.upsert(
+            media_id=media_id, season=1, episode=1, air_date=aired,
+            state=WantedState.SEARCHING,
+        )
+        await repos.wanted.record_search_miss(wanted_id, "nothing found")
+        await repos.wanted.db.execute(
+            "UPDATE wanted SET search_attempts=100, "
+            "first_search_at=datetime('now','-8 days') WHERE id=?", (wanted_id,)
+        )
+        assert await repos.wanted.expire_stale(45, 180, max_attempts=60) == 0
 
     async def test_upcoming_puts_future_releases_first(self, repos) -> None:
         media_id = await seed_show(repos)
@@ -215,6 +323,21 @@ class TestWanted:
             for r in await repos.wanted.for_media(media_id)
         )
 
+    async def test_completion_keeps_seen_and_owned_episodes_settled(self, repos) -> None:
+        media_id = await seed_show(repos)
+        ids = [
+            await repos.wanted.upsert(media_id=media_id, season=2, episode=episode)
+            for episode in range(1, 4)
+        ]
+        await repos.wanted.mark_watched([ids[0]])
+        await repos.wanted.set_state(ids[1], WantedState.DOWNLOADED)
+
+        await repos.wanted.mark_covered(media_id, 2, [1, 2, 3])
+
+        assert [(await repos.wanted.get(wanted_id))["state"] for wanted_id in ids] == [
+            WantedState.WATCHED, WantedState.DOWNLOADED, WantedState.GRABBED,
+        ]
+
 
 class TestDownloads:
     async def test_release_keys_cover_downloads_and_blocklist(self, repos) -> None:
@@ -238,6 +361,32 @@ class TestDownloads:
         assert await repos.downloads.approve_many([pending, already]) == 1
         assert (await repos.downloads.get(pending))["state"] == DownloadState.QUEUED
         assert (await repos.downloads.get(already))["state"] == DownloadState.COMPLETED
+
+    async def test_archived_downloads_are_not_operational(self, repos) -> None:
+        media_id = await seed_show(repos)
+        ids = {}
+        for index, state in enumerate((
+            DownloadState.PENDING_APPROVAL, DownloadState.QUEUED,
+            DownloadState.NO_SPACE, DownloadState.DOWNLOADING,
+        ), start=1):
+            ids[state] = await repos.downloads.create(
+                media_id=media_id, display_title=f"Silo {state}", indexer="T",
+                indexer_id=str(index), size_bytes=1, state=state,
+            )
+            await repos.downloads.archive(ids[state])
+        await repos.downloads.mark_missing(ids[DownloadState.DOWNLOADING])
+        await repos.db.execute(
+            "UPDATE downloads SET missing_since = datetime('now', '-1 hour') WHERE id = ?",
+            (ids[DownloadState.DOWNLOADING],),
+        )
+
+        assert await repos.downloads.pending_groups() == []
+        assert await repos.downloads.queued() == []
+        assert await repos.downloads.in_flight() == []
+        assert await repos.downloads.missing_beyond(300) == []
+        assert await repos.downloads.active_count() == 0
+        assert await repos.downloads.approve_many([ids[DownloadState.PENDING_APPROVAL]]) == 0
+        assert await repos.downloads.deny_many([ids[DownloadState.PENDING_APPROVAL]]) == []
 
     async def test_completion_stamps_progress_and_time(self, repos) -> None:
         media_id = await seed_show(repos)
@@ -323,3 +472,46 @@ class TestCacheAndEvents:
         row = (await repos.tasks.all())[0]
         assert row["error_count"] == 1
         assert row["last_error"] == "boom"
+
+
+class TestMigrations:
+    async def test_existing_database_upgrades_search_and_download_history(self, tmp_path) -> None:
+        path = tmp_path / "old.db"
+        connection = sqlite3.connect(path)
+        connection.execute(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT)"
+        )
+        for version, name, sql in MIGRATIONS:
+            if version > 4:
+                break
+            connection.executescript(sql)
+            connection.execute(
+                "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
+                (version, name),
+            )
+        connection.execute(
+            "INSERT INTO media (id, media_type, title) VALUES (1, 'show', 'Silo')"
+        )
+        connection.execute(
+            """INSERT INTO wanted
+               (id, media_id, season, episode, reason, state, search_attempts, last_search_at)
+               VALUES (1, 1, 1, 1, 'grabbed #1', 'grabbed', 1, '2026-09-01 12:00:00')"""
+        )
+        connection.execute(
+            """INSERT INTO downloads
+               (id, media_id, wanted_id, display_title, state)
+               VALUES (1, 1, 1, 'Silo S01E01', 'queued')"""
+        )
+        connection.commit()
+        connection.close()
+
+        database = Database(path)
+        await database.connect()
+        try:
+            wanted = await database.fetch_one("SELECT first_search_at FROM wanted WHERE id = 1")
+            download = await database.fetch_one("SELECT wanted_count FROM downloads WHERE id = 1")
+            assert wanted["first_search_at"] == "2026-09-01 12:00:00"
+            assert download["wanted_count"] == 1
+            assert await database.fetch_value("SELECT MAX(version) FROM schema_migrations") == 6
+        finally:
+            await database.close()

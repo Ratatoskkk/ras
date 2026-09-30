@@ -33,7 +33,7 @@ export default {
             ${label}${countFor(value) !== null ? html` <span class="faint">${countFor(value)}</span>` : ''}
           </button>`)}
         <div class="grow"></div>
-        <input type="search" placeholder="Filter by title…" data-action="search"
+        <input type="search" placeholder="Filter by title…" aria-label="Filter downloads by title" data-action="search"
                value="${query}" style="max-width:240px">
       </div>
 
@@ -45,7 +45,7 @@ export default {
 
       ${card('History',
         html`<div class="tablewrap" id="history-host">${emptyState('…', 'Loading…')}</div>`,
-        html`<button class="btn btn--sm btn--ghost" data-action="clear-history">Clear failed &amp; denied</button>`)}
+        html`<button class="btn btn--sm btn--ghost" data-action="clear-history">Clear failed, denied &amp; cancelled</button>`)}
     `);
     loadHistory(root);
   },

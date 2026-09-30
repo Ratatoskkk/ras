@@ -3,14 +3,14 @@
 import { bytes, duration, episodeCode, esc, html, percent, posterUrl, speed, titleCase } from './util.js';
 
 export const STATE_STYLE = {
-  downloading:      { label: 'Downloading',  cls: 'pill--info',   icon: '↓' },
-  pending_approval: { label: 'Needs you',    cls: 'pill--warn',   icon: '!' },
-  queued:           { label: 'Queued',       cls: 'pill--accent', icon: '·' },
-  completed:        { label: 'Complete',     cls: 'pill--ok',     icon: '✓' },
-  failed:           { label: 'Failed',       cls: 'pill--err',    icon: '✕' },
-  denied:           { label: 'Denied',       cls: '',             icon: '−' },
-  no_space:         { label: 'No space',     cls: 'pill--err',    icon: '⚠' },
-  cancelled:        { label: 'Cancelled',    cls: '',             icon: '−' },
+  downloading:      { label: 'Downloading',  cls: 'pill--info' },
+  pending_approval: { label: 'Needs you',    cls: 'pill--warn' },
+  queued:           { label: 'Queued',       cls: 'pill--accent' },
+  completed:        { label: 'Complete',     cls: 'pill--ok' },
+  failed:           { label: 'Failed',       cls: 'pill--err' },
+  denied:           { label: 'Denied',       cls: '' },
+  no_space:         { label: 'No space',     cls: 'pill--err' },
+  cancelled:        { label: 'Cancelled',    cls: '' },
 };
 
 export const WANT_STATE_STYLE = {
@@ -18,7 +18,7 @@ export const WANT_STATE_STYLE = {
   searching:   { label: 'Searching',   cls: 'pill--accent' },
   grabbed:     { label: 'Grabbed',     cls: 'pill--info' },
   downloaded:  { label: 'In library',  cls: 'pill--ok' },
-  unavailable: { label: 'Gave up',     cls: 'pill--err' },
+  unavailable: { label: 'Checking daily', cls: 'pill--info' },
   ignored:     { label: 'Out of scope', cls: '' },
   watched:     { label: 'Seen',        cls: 'pill--ok' },
 };
@@ -32,7 +32,7 @@ export function poster(path, alt = '') {
   const url = posterUrl(path);
   return url
     ? html`<img class="poster" src="${url}" alt="${alt}" loading="lazy" decoding="async">`
-    : html`<div class="poster poster--ph" aria-hidden="true">▦</div>`;
+    : html`<div class="poster poster--ph" aria-hidden="true"></div>`;
 }
 
 export function qualityTags(item) {
@@ -52,10 +52,9 @@ export function progressBar(fraction, variant = '') {
   return html`<div class="bar"><div class="bar__fill ${variant}" style="width:${width.toFixed(2)}%"></div></div>`;
 }
 
-export function emptyState(icon, title, hint = '') {
+export function emptyState(_icon, title, hint = '') {
   return html`
     <div class="empty">
-      <span class="empty__icon">${icon}</span>
       <div>${title}</div>
       ${hint ? html`<div class="faint" style="margin-top:4px">${hint}</div>` : ''}
     </div>`;

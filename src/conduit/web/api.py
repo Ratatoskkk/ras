@@ -178,8 +178,8 @@ async def approve_downloads(request: Request, payload: IdList) -> dict[str, Any]
 @router.post("/downloads/deny")
 async def deny_downloads(request: Request, payload: IdList) -> dict[str, Any]:
     ctx = ctx_of(request)
-    rows = await ctx.repos.downloads.by_ids(payload.ids)
-    count = await ctx.repos.downloads.deny_many(payload.ids)
+    rows = await ctx.repos.downloads.deny_many(payload.ids)
+    count = len(rows)
     # Denied releases go on the blocklist so the next search does not re-offer them.
     for row in rows:
         if row.get("indexer_id"):
@@ -213,6 +213,8 @@ async def remove_download(
     if not result.get("ok"):
         if result.get("seed_blocked"):
             raise HTTPException(409, result["error"])
+        if result.get("client_unavailable"):
+            raise HTTPException(503, result["error"])
         raise HTTPException(404, result.get("error", "not found"))
     return result
 

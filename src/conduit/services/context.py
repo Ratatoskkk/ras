@@ -39,6 +39,8 @@ class Conduit:
         self.db = Database(self.settings.database_path)
         self.repos: Repos = None  # type: ignore[assignment]
         self.bus = EventBus()
+        self.download_decision_lock = asyncio.Lock()
+        self.queue_dispatch_lock = asyncio.Lock()
         self.started_at = datetime.now(UTC)
 
         self.plex: PlexClient | None = None
@@ -106,7 +108,7 @@ class Conduit:
         enabled = self.config.enabled_indexers()
         signature = tuple(
             (i.name, i.type, i.base_url, i.api_key_env, i.rate_limit_per_minute, i.priority,
-             i.score_bonus, i.verify_ssl, i.timeout_seconds)
+             i.score_bonus, i.verify_ssl, i.timeout_seconds, i.only_alive)
             for i in enabled
         )
         if signature == self._indexer_signature and self.indexers.indexers:

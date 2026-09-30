@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
 from conduit.config import ConfigStore, Settings
 from conduit.domain.models import DownloadState
+from conduit.services.bus import QUEUE_LIMIT, EventBus
 from conduit.web.app import create_app
 from conduit.web.security import is_private_address
-from conduit.web.ws import snapshot_carrier
+from conduit.web.ws import snapshot_carrier, websocket_endpoint
 
 
 @pytest.fixture
@@ -79,6 +83,46 @@ class TestEndpoints:
         assert await ctx.repos.downloads.get(kept) is not None
 
 
+async def test_stalled_websocket_closes_so_browser_can_reconnect(
+    monkeypatch, settings: Settings
+) -> None:
+    bus = EventBus()
+
+    class Socket:
+        def __init__(self) -> None:
+            self.app = SimpleNamespace(state=SimpleNamespace(
+                conduit=SimpleNamespace(settings=settings, bus=bus),
+                supervisor=SimpleNamespace(status=lambda: []),
+            ))
+            self.client = SimpleNamespace(host="127.0.0.1")
+            self.query_params = {}
+            self.close_code = None
+
+        async def accept(self) -> None:
+            pass
+
+        async def send_json(self, message) -> None:
+            if message["topic"] == "state":
+                for _ in range(QUEUE_LIMIT + 1):
+                    bus.publish("download.progress")
+
+        async def receive_text(self) -> str:
+            await asyncio.Future()
+
+        async def close(self, code: int, reason: str) -> None:
+            self.close_code = code
+
+    async def fake_state(ctx) -> dict:
+        return {}
+
+    monkeypatch.setattr("conduit.web.ws.state.build_state", fake_state)
+    socket = Socket()
+    await websocket_endpoint(socket)
+
+    assert socket.close_code == 1013
+    assert bus.listener_count == 0
+
+
 class TestApprovalFlow:
     async def _pending(self, client) -> int:
         ctx = client.app.state.conduit
@@ -103,9 +147,27 @@ class TestApprovalFlow:
         entries = (await client.get("/api/blocklist")).json()
         assert entries[0]["indexer_id"] == "42"
 
+    async def test_stale_deny_does_not_blocklist_an_approved_release(self, client) -> None:
+        download_id = await self._pending(client)
+        await client.post("/api/downloads/approve", json={"ids": [download_id]})
+        response = await client.post("/api/downloads/deny", json={"ids": [download_id]})
+        assert response.json() == {"ok": True, "denied": 0}
+        assert (await client.get("/api/blocklist")).json() == []
+
     async def test_retry_refuses_a_download_that_is_not_stuck(self, client) -> None:
         download_id = await self._pending(client)
         assert (await client.post(f"/api/downloads/{download_id}/retry")).status_code == 400
+
+    async def test_remove_reports_unavailable_client_without_archiving(self, client) -> None:
+        download_id = await self._pending(client)
+        ctx = client.app.state.conduit
+        await ctx.repos.downloads.set_state(download_id, DownloadState.DOWNLOADING)
+        ctx.qbt = None
+
+        response = await client.delete(f"/api/downloads/{download_id}")
+
+        assert response.status_code == 503
+        assert (await ctx.repos.downloads.get(download_id))["archived"] == 0
 
 
 class TestMediaEndpoints:

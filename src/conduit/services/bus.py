@@ -35,6 +35,7 @@ class Subscription:
     def __init__(self, bus: EventBus) -> None:
         self._bus = bus
         self.queue: asyncio.Queue[Message] = asyncio.Queue(maxsize=QUEUE_LIMIT)
+        self.active = True
 
     async def __aenter__(self) -> Subscription:
         return self
@@ -61,6 +62,7 @@ class EventBus:
 
     def unsubscribe(self, sub: Subscription) -> None:
         self._subscribers.discard(sub)
+        sub.active = False
 
     @property
     def listener_count(self) -> int:

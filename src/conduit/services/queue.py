@@ -24,13 +24,17 @@ from .context import Conduit
 
 log = get_logger("queue")
 
-# How hard to look for a torrent we have just handed over. A file add is there
-# at once; a URL add has to be fetched by the client first.
+# How hard to look for a torrent we have just handed over.
 CONFIRM_ATTEMPTS = 6
 CONFIRM_DELAY_SECONDS = 1.5
 
 
 async def dispatch_queue(ctx: Conduit) -> dict[str, int]:
+    async with ctx.queue_dispatch_lock:
+        return await _dispatch_queue(ctx)
+
+
+async def _dispatch_queue(ctx: Conduit) -> dict[str, int]:
     policy = ctx.config.policy
     queued = await ctx.repos.downloads.queued()
     if not queued:
@@ -93,11 +97,10 @@ async def _dispatch_one(
     download_id = int(row["id"])
     title = row["display_title"]
 
-    content, info_hash, real_size = await _fetch_torrent(ctx, row)
-    size_bytes = real_size or float(row["size_bytes"] or 0)
-
+    content, info_hash, size_bytes = await _fetch_torrent(ctx, row)
     if info_hash and info_hash in existing_hashes:
         # Already in the client (added manually, or left over from a crash).
+        await ctx.repos.downloads.set_verified_size(download_id, size_bytes)
         await ctx.repos.downloads.set_hash(download_id, info_hash)
         await ctx.repos.downloads.set_state(download_id, DownloadState.DOWNLOADING)
         await ctx.record(
@@ -106,6 +109,28 @@ async def _dispatch_one(
             download_id=download_id,
         )
         return True
+
+    reported_size = float(row["size_bytes"] or 0)
+    auto_approved = (
+        policy.auto_approve_below_gb > 0
+        and size_bytes < policy.auto_approve_below_gb * 1024**3
+    )
+    needs_new_approval = (
+        reported_size <= policy.approval_size_bytes < size_bytes
+        and not auto_approved
+    )
+    await ctx.repos.downloads.set_verified_size(
+        download_id, size_bytes, require_approval=needs_new_approval
+    )
+    if needs_new_approval:
+        await ctx.record(
+            "approval",
+            f"Needs approval: {title} — verified size is {human_size(size_bytes)}",
+            level=EventLevel.WARNING,
+            download_id=download_id,
+        )
+        ctx.bus.publish("download.updated", download_id=download_id)
+        return False
 
     drive = storage.choose(
         drives,
@@ -129,38 +154,21 @@ async def _dispatch_one(
 
     own_tag = f"{policy.torrent_tag_prefix}_{download_id}"
     tags = f"{policy.torrent_tag_prefix},{own_tag}"
-    if content:
-        await ctx.qbt.add_torrent_file(
-            content,
-            filename=f"conduit-{download_id}.torrent",
-            save_path=drive.path,
-            category=policy.torrent_category,
-            tags=tags,
-        )
-    elif row.get("download_url"):
-        # Tracker would not hand over the file; let the client fetch it. We
-        # lose hash-precision here, so the monitor falls back to tag matching.
-        await ctx.qbt.add_torrent_url(
-            row["download_url"],
-            save_path=drive.path,
-            category=policy.torrent_category,
-            tags=tags,
-        )
-    else:
-        raise RuntimeError("no torrent file and no download URL")
+    await ctx.qbt.add_torrent_file(
+        content,
+        filename=f"conduit-{download_id}.torrent",
+        save_path=drive.path,
+        category=policy.torrent_category,
+        tags=tags,
+    )
 
     # qBittorrent answers "Ok." when it *accepts* the request, not when the
-    # torrent exists -- a URL add is fetched in the background and fails
-    # silently if the tracker is slow or refuses it. Without this check the
+    # torrent exists. Without this check the
     # download is reported as started, marked downloading, and then reappears
     # moments later as "disappeared from qBittorrent".
     landed = await _confirm_added(ctx, info_hash=info_hash, tag=own_tag)
     if landed is None:
-        reason = (
-            "qBittorrent accepted the request but the torrent never appeared. "
-            + ("The tracker may be refusing the download link."
-               if not content else "The client may have rejected the file.")
-        )
+        reason = "qBittorrent accepted the file but the torrent never appeared."
         await ctx.repos.downloads.set_state(
             download_id, DownloadState.FAILED, error=reason
         )
@@ -199,9 +207,8 @@ async def _confirm_added(
 ) -> str | None:
     """Wait briefly for a just-added torrent to actually exist in the client.
 
-    Returns its info-hash, or ``None`` if it never turned up. Adding is
-    asynchronous -- a file add lands almost immediately, a URL add has to be
-    fetched first -- so this polls rather than asking once.
+    Returns its info-hash, or ``None`` if it never turned up. Adding can be
+    asynchronous, so this polls rather than asking once.
     """
     for attempt in range(CONFIRM_ATTEMPTS):
         if attempt:
@@ -211,8 +218,8 @@ async def _confirm_added(
                 found = await ctx.qbt.torrents_by_hash([info_hash])
                 if info_hash in found:
                     return info_hash
-            # No hash (URL add), or the hash has not registered yet: our own
-            # per-download tag is the other thing we know about it.
+            # The hash may not have registered yet: our per-download tag is
+            # another way to confirm the add.
             for torrent in await ctx.qbt.torrents(tag=tag):
                 if tag in torrent.tags:
                     return torrent.info_hash
@@ -223,11 +230,11 @@ async def _confirm_added(
 
 async def _fetch_torrent(
     ctx: Conduit, row: dict[str, Any]
-) -> tuple[bytes | None, str | None, float]:
+) -> tuple[bytes, str, float]:
     """Download the .torrent and read its true identity and size."""
     url = row.get("download_url")
     if not url:
-        return None, None, 0.0
+        raise RuntimeError("no torrent download URL")
 
     release = Release(
         indexer=row.get("indexer") or "",
@@ -239,31 +246,42 @@ async def _fetch_torrent(
     try:
         content = await ctx.indexers.fetch_torrent(release)
     except Exception as exc:
-        log.warning(
-            "could not fetch .torrent, falling back to URL add",
-            extra={"title": row["display_title"], "err": str(exc)},
-        )
-        return None, None, 0.0
+        raise RuntimeError("could not fetch .torrent; retry when the tracker is available") from exc
 
     if not content:
-        return None, None, 0.0
+        raise RuntimeError("tracker did not return a .torrent file")
 
     try:
         summary = bencode.torrent_summary(content)
     except bencode.BencodeError as exc:
-        log.warning("torrent file was malformed", extra={"err": str(exc)})
-        return content, None, 0.0
+        raise RuntimeError(f"tracker returned a malformed torrent file: {exc}") from exc
 
     return content, str(summary["info_hash"]), float(summary["size_bytes"])
 
 
 async def retry_download(ctx: Conduit, download_id: int) -> bool:
     """Push a failed or space-blocked item back into the queue."""
-    row = await ctx.repos.downloads.get(download_id)
-    if not row or row["state"] not in (
-        DownloadState.FAILED, DownloadState.NO_SPACE, DownloadState.CANCELLED
-    ):
-        return False
-    await ctx.repos.downloads.set_state(download_id, DownloadState.QUEUED, error=None)
+    async with ctx.download_decision_lock:
+        row = await ctx.repos.downloads.get(download_id)
+        if not row or row["archived"] or row["state"] not in (
+            DownloadState.FAILED, DownloadState.NO_SPACE, DownloadState.CANCELLED
+        ):
+            return False
+        if (row["state"] == DownloadState.CANCELLED
+                and not await ctx.repos.wanted.reclaim_for_retry(
+                    download_id, int(row["wanted_count"]),
+                    int(row["wanted_id"])
+                    if row["wanted_id"] and not row["is_season_pack"]
+                    and (row["episode_to"] is None
+                         or row["episode_to"] == row["episode_from"])
+                    else None,
+                )):
+            return False
+        if (row["state"] != DownloadState.CANCELLED and row["wanted_count"]
+                and not await ctx.repos.wanted.still_claimed_for_download(
+                    download_id, int(row["wanted_count"])
+                )):
+            return False
+        await ctx.repos.downloads.set_state(download_id, DownloadState.QUEUED, error=None)
     await ctx.record("queue", f"Retrying {row['display_title']}", download_id=download_id)
     return True

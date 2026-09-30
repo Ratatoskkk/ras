@@ -366,7 +366,7 @@ def plan_grab_targets(
                 GrabTarget(
                     season=season,
                     episode=None,
-                    episode_count=max(len(episodes), 1),
+                    episode_count=max(total, len(episodes), 1),
                     label=f"Season {season}",
                 )
             )
@@ -381,12 +381,14 @@ def plan_grab_targets(
 
 def display_title(media_title: str, parsed: ParsedRelease, target: GrabTarget | None = None) -> str:
     """Human-readable name for the dashboard and the download client tag."""
+    if parsed.season_to is not None and parsed.season is not None:
+        return f"{media_title} (Seasons {parsed.season}–{parsed.season_to})"
+    if parsed.is_complete_series:
+        return f"{media_title} (Complete Series)"
     if target is not None and target.season is not None:
         if target.episode is not None:
             return f"{media_title} ({episode_code(target.season, target.episode)})"
         return f"{media_title} (Season {target.season})"
-    if parsed.is_complete_series:
-        return f"{media_title} (Complete Series)"
     if parsed.season is not None:
         if parsed.episodes:
             first, last = min(parsed.episodes), max(parsed.episodes)

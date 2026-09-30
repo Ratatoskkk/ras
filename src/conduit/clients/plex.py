@@ -14,6 +14,7 @@ from typing import Any
 
 from ..domain.models import LibraryItem, WatchlistEntry
 from ..logs import get_logger
+from ..util.resilience import TransientError
 from .http import HttpService
 
 log = get_logger("plex")
@@ -137,9 +138,15 @@ class PlexClient:
             container = _container(payload)
             batch = container.get("Metadata") or []
             raw_items.extend(batch)
-            total = int(container.get("totalSize") or container.get("size") or 0)
-            start += WATCHLIST_PAGE_SIZE
-            if len(batch) < WATCHLIST_PAGE_SIZE or start >= total:
+            start += len(batch)
+            total = container.get("totalSize")
+            if total is not None and start >= int(total):
+                break
+            if not batch:
+                if total is not None:
+                    raise TransientError("Plex returned an incomplete watchlist page")
+                break
+            if total is None and len(batch) < WATCHLIST_PAGE_SIZE:
                 break
 
         if not raw_items:
@@ -234,9 +241,15 @@ class PlexClient:
             container = _container(payload)
             batch = container.get("Metadata") or []
             collected.extend(batch)
-            total = container.get("totalSize", container.get("size", len(collected)))
-            start += PAGE_SIZE
-            if len(batch) < PAGE_SIZE or start >= int(total or 0):
+            start += len(batch)
+            total = container.get("totalSize")
+            if total is not None and start >= int(total):
+                break
+            if not batch:
+                if total is not None:
+                    raise TransientError(f"Plex returned an incomplete page for section {section_key}")
+                break
+            if total is None and len(batch) < PAGE_SIZE:
                 break
         return collected
 
@@ -254,12 +267,9 @@ class PlexClient:
         show_keys = [s["key"] for s in sections if s.get("type") == "show"]
 
         movie_pages = await asyncio.gather(
-            *(self._paged(key, TYPE_MOVIE) for key in movie_keys), return_exceptions=True
+            *(self._paged(key, TYPE_MOVIE) for key in movie_keys)
         )
         for page in movie_pages:
-            if isinstance(page, BaseException):
-                log.warning("movie section scan failed", extra={"err": str(page)})
-                continue
             for raw in page:
                 part = _first_part(raw)
                 ids = _guid_map(raw)
@@ -279,13 +289,9 @@ class PlexClient:
                 )
 
         for key in show_keys:
-            try:
-                shows, episodes = await asyncio.gather(
-                    self._paged(key, TYPE_SHOW), self._paged(key, TYPE_EPISODE)
-                )
-            except Exception as exc:
-                log.warning("show section scan failed", extra={"section": key, "err": str(exc)})
-                continue
+            shows, episodes = await asyncio.gather(
+                self._paged(key, TYPE_SHOW), self._paged(key, TYPE_EPISODE)
+            )
 
             show_tmdb: dict[str, str | None] = {}
             for raw in shows:

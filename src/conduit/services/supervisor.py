@@ -227,11 +227,13 @@ class Supervisor:
         computed -- for the library index that was up to half an hour, which
         looked exactly like the setting not working at all.
         """
-        state.wake.clear()
         started = time.monotonic()
         deadline = started + seconds
 
         while not self._stopping.is_set():
+            if state.wake.is_set():
+                state.wake.clear()
+                return
             # Only ever brings the deadline forward: a lengthened interval
             # applies from the next cycle, a shortened one applies now.
             deadline = min(deadline, started + self._delay_for(state))
@@ -245,4 +247,5 @@ class Supervisor:
                 )
             except TimeoutError:
                 continue
+            state.wake.clear()
             return  # triggered from the API, or shutting down

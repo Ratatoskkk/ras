@@ -8,6 +8,7 @@ modules, including the web layer) and gives the test suite a single seam.
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from typing import Any
 
 from ..domain.models import DownloadState, EventLevel, LibraryItem, WantedState
@@ -154,13 +155,24 @@ class WantedRepo(BaseRepo):
         ON CONFLICT (media_id, IFNULL(season, -1), IFNULL(episode, -1)) DO UPDATE SET
             air_date = COALESCE(excluded.air_date, wanted.air_date),
             title = CASE WHEN excluded.title != '' THEN excluded.title ELSE wanted.title END,
-            -- Refresh air date and title, but keep whatever progress this want
-            -- has already made. Items we gave up on -- or stood down because a
-            -- policy excluded them -- are revived, because the planner asking
-            -- for it again means it is wanted again. Without this, widening
-            -- `backlog_mode` would be a one-way door.
-            state = CASE WHEN wanted.state IN ('unavailable', 'ignored')
+            state = CASE WHEN excluded.state = 'waiting'
+                              AND wanted.state IN ('waiting', 'searching', 'unavailable')
+                         THEN 'waiting'
+                         WHEN wanted.state = 'ignored'
+                              OR (wanted.state = 'waiting' AND excluded.state = 'searching')
                          THEN excluded.state ELSE wanted.state END,
+            reason = CASE WHEN excluded.state = 'waiting'
+                              AND wanted.state IN ('waiting', 'searching', 'unavailable')
+                          THEN NULL ELSE wanted.reason END,
+            search_attempts = CASE WHEN excluded.state = 'waiting'
+                              AND wanted.state IN ('waiting', 'searching', 'unavailable')
+                                   THEN 0 ELSE wanted.search_attempts END,
+            first_search_at = CASE WHEN excluded.state = 'waiting'
+                              AND wanted.state IN ('waiting', 'searching', 'unavailable')
+                                   THEN NULL ELSE wanted.first_search_at END,
+            last_search_at = CASE WHEN excluded.state = 'waiting'
+                              AND wanted.state IN ('waiting', 'searching', 'unavailable')
+                                  THEN NULL ELSE wanted.last_search_at END,
             updated_at = datetime('now')
         RETURNING id
     """
@@ -192,10 +204,88 @@ class WantedRepo(BaseRepo):
             f"""UPDATE wanted SET state = ?, reason = ?,
                     search_attempts = search_attempts + {1 if bump_attempt else 0},
                     last_search_at = CASE WHEN ? THEN datetime('now') ELSE last_search_at END,
+                    first_search_at = CASE WHEN ? THEN COALESCE(first_search_at, datetime('now'))
+                                           ELSE first_search_at END,
                     updated_at = datetime('now')
                 WHERE id = ?""",
-            (state, reason, int(bump_attempt), wanted_id),
+            (state, reason, int(bump_attempt), int(bump_attempt), wanted_id),
         )
+
+    async def reopen_for_download(self, download_id: int, wanted_id: int | None) -> int:
+        removed_reason = f"download #{download_id} was removed"
+        cursor = await self.db.conn.execute(
+            """UPDATE wanted SET state = ?, reason = ?,
+                   updated_at = datetime('now')
+               WHERE state = ? AND reason = ?""",
+            (WantedState.SEARCHING, removed_reason,
+             WantedState.GRABBED, f"grabbed #{download_id}"),
+        )
+        count = cursor.rowcount
+        await cursor.close()
+        if count == 0 and wanted_id is not None:
+            cursor = await self.db.conn.execute(
+                """UPDATE wanted SET state = ?, reason = ?,
+                       updated_at = datetime('now')
+                   WHERE id = ? AND state IN (?, ?)""",
+                (WantedState.SEARCHING, removed_reason, wanted_id,
+                 WantedState.GRABBED, WantedState.WAITING),
+            )
+            count = cursor.rowcount
+            await cursor.close()
+        return max(count, 0)
+
+    async def reclaim_for_retry(
+        self, download_id: int, expected_count: int, legacy_wanted_id: int | None = None
+    ) -> int:
+        removed_reason = f"download #{download_id} was removed"
+        count = await self.db.fetch_value(
+            "SELECT COUNT(*) FROM wanted WHERE state = ? AND reason = ?",
+            (WantedState.SEARCHING, removed_reason),
+            default=0,
+        )
+        if not count and not expected_count and legacy_wanted_id is not None:
+            cursor = await self.db.conn.execute(
+                """UPDATE wanted SET state = ?, reason = ?, updated_at = datetime('now')
+                   WHERE id = ? AND state = ? AND reason = 'download was removed'""",
+                (WantedState.GRABBED, f"grabbed #{download_id}", legacy_wanted_id,
+                 WantedState.SEARCHING),
+            )
+            count = cursor.rowcount
+            await cursor.close()
+            return max(count, 0)
+        if not count or (expected_count and count != expected_count):
+            return 0
+        cursor = await self.db.conn.execute(
+            """UPDATE wanted SET state = ?, reason = ?, updated_at = datetime('now')
+               WHERE state = ? AND reason = ?""",
+            (WantedState.GRABBED, f"grabbed #{download_id}",
+             WantedState.SEARCHING, removed_reason),
+        )
+        count = cursor.rowcount
+        await cursor.close()
+        return max(count, 0)
+
+    async def still_claimed_for_download(self, download_id: int, expected_count: int) -> bool:
+        count = await self.db.fetch_value(
+            "SELECT COUNT(*) FROM wanted WHERE state = ? AND reason = ?",
+            (WantedState.GRABBED, f"grabbed #{download_id}"),
+            default=0,
+        )
+        return count == expected_count
+
+    async def record_search_miss(self, wanted_id: int, reason: str) -> bool:
+        cursor = await self.db.conn.execute(
+            """UPDATE wanted SET reason = ?, search_attempts = search_attempts + 1,
+                   last_search_at = datetime('now'),
+                   first_search_at = COALESCE(first_search_at, datetime('now')),
+                   updated_at = datetime('now')
+               WHERE id = ? AND state IN (?, ?, ?)""",
+            (reason, wanted_id, WantedState.WAITING, WantedState.SEARCHING,
+             WantedState.UNAVAILABLE),
+        )
+        changed = cursor.rowcount > 0
+        await cursor.close()
+        return changed
 
     async def promote_due(self, now_iso: str) -> int:
         """Move ``waiting`` items whose air date has passed into ``searching``."""
@@ -208,26 +298,50 @@ class WantedRepo(BaseRepo):
         await cursor.close()
         return max(count, 0)
 
-    async def due_for_search(self, limit: int = 200, fresh_days: int | None = None) -> list[Row]:
+    async def due_for_search(
+        self, limit: int = 200, fresh_days: int | None = None,
+        lead_hours: int = 0,
+    ) -> list[Row]:
         """Searchable wants, joined to their media row.
 
         ``fresh_days`` restricts to recently aired items -- the aggressive
-        short-interval poll that catches same-day releases.
+        short-interval poll that catches same-day releases. The limit selects
+        titles; all matching wants for those titles must be searched together.
         """
-        clause = ""
-        params: list[Any] = [WantedState.SEARCHING]
+        cutoff = (date.today() + timedelta(hours=lead_hours)).isoformat()
+        clause = """(
+            w.state = ? OR (
+                w.state = ? AND (w.last_search_at IS NULL
+                                 OR w.last_search_at <= datetime('now', '-1 day'))
+            )) AND (w.air_date IS NULL OR w.air_date <= ?)"""
+        params: list[Any] = [
+            WantedState.SEARCHING, WantedState.UNAVAILABLE, cutoff,
+        ]
         if fresh_days is not None:
-            clause = "AND w.air_date >= date('now', ?)"
-            params.append(f"-{fresh_days} days")
+            clause += " AND w.air_date >= ?"
+            params.append((date.today() - timedelta(days=fresh_days)).isoformat())
         params.append(limit)
+        selected = await self.db.fetch_all(
+            f"""SELECT w.*, m.media_type, m.tmdb_id, m.title AS media_title, m.year,
+                       m.poster_path, m.profile, m.monitored, m.ignored
+                FROM wanted w JOIN media m ON m.id = w.media_id
+                WHERE {clause} AND m.monitored = 1 AND m.ignored = 0
+                ORDER BY w.last_search_at IS NOT NULL, w.last_search_at, w.air_date DESC
+                LIMIT ?""",
+            params,
+        )
+        if not selected:
+            return []
+        media_ids = list(dict.fromkeys(int(row["media_id"]) for row in selected))
+        marks = ", ".join("?" * len(media_ids))
         return await self.db.fetch_all(
             f"""SELECT w.*, m.media_type, m.tmdb_id, m.title AS media_title, m.year,
                        m.poster_path, m.profile, m.monitored, m.ignored
                 FROM wanted w JOIN media m ON m.id = w.media_id
-                WHERE w.state = ? {clause} AND m.monitored = 1 AND m.ignored = 0
-                ORDER BY w.last_search_at IS NOT NULL, w.last_search_at, w.air_date DESC
-                LIMIT ?""",
-            params,
+                WHERE w.media_id IN ({marks}) AND {clause}
+                  AND m.monitored = 1 AND m.ignored = 0
+                ORDER BY w.last_search_at IS NOT NULL, w.last_search_at, w.air_date DESC""",
+            [*media_ids, *params[:-1]],
         )
 
     async def upcoming(self, limit: int = 500) -> list[Row]:
@@ -258,6 +372,19 @@ class WantedRepo(BaseRepo):
             "SELECT * FROM wanted WHERE media_id = ? ORDER BY season, episode", (media_id,)
         )
 
+    async def claimable(self, wanted_ids: list[int]) -> bool:
+        if not wanted_ids:
+            return False
+        marks = ", ".join("?" * len(wanted_ids))
+        count = await self.db.fetch_value(
+            f"""SELECT COUNT(*) FROM wanted WHERE id IN ({marks})
+                AND state IN (?, ?, ?)""",
+            [*wanted_ids, WantedState.WAITING, WantedState.SEARCHING,
+             WantedState.UNAVAILABLE],
+            default=0,
+        )
+        return count == len(wanted_ids)
+
     async def set_state_for_media(
         self, media_id: int, state: str, only_states: tuple[str, ...] | None = None
     ) -> None:
@@ -278,15 +405,17 @@ class WantedRepo(BaseRepo):
             placeholders = ", ".join("?" * len(episodes))
             await self.db.execute(
                 f"""UPDATE wanted SET state = ?, updated_at = datetime('now')
-                    WHERE media_id = ? AND season = ? AND episode IN ({placeholders})""",
-                [WantedState.GRABBED, media_id, season, *episodes],
+                    WHERE media_id = ? AND season = ? AND episode IN ({placeholders})
+                      AND state IN (?, ?, ?)""",
+                [WantedState.GRABBED, media_id, season, *episodes,
+                 WantedState.WAITING, WantedState.SEARCHING, WantedState.UNAVAILABLE],
             )
         else:
             await self.db.execute(
                 """UPDATE wanted SET state = ?, updated_at = datetime('now')
-                   WHERE media_id = ? AND season = ? AND state IN (?, ?)""",
+                   WHERE media_id = ? AND season = ? AND state IN (?, ?, ?)""",
                 (WantedState.GRABBED, media_id, season,
-                 WantedState.WAITING, WantedState.SEARCHING),
+                 WantedState.WAITING, WantedState.SEARCHING, WantedState.UNAVAILABLE),
             )
 
     async def retire(
@@ -389,8 +518,11 @@ class WantedRepo(BaseRepo):
         await cursor.close()
         return max(count, 0)
 
-    async def expire_stale(self, tv_days: int, movie_days: int, max_attempts: int = 60) -> int:
-        """Retire wants we have genuinely hunted for and never found.
+    async def expire_stale(
+        self, tv_days: int, movie_days: int, max_attempts: int = 60,
+        fresh_days: int = 7,
+    ) -> int:
+        """Slow polling for wants we have hunted for and never found.
 
         The clock runs from when *we* started looking, not from the air date --
         otherwise every back-catalogue episode of a newly followed series would
@@ -399,13 +531,17 @@ class WantedRepo(BaseRepo):
         cursor = await self.db.conn.execute(
             """UPDATE wanted SET state = ?, reason = 'searched repeatedly, no release found',
                    updated_at = datetime('now')
-               WHERE state = ? AND search_attempts > 0 AND last_search_at IS NOT NULL
-                 AND (
-                   search_attempts >= ?
-                   OR (episode IS NOT NULL AND created_at < datetime('now', ?))
-                   OR (episode IS NULL AND created_at < datetime('now', ?))
+                WHERE state = ? AND search_attempts > 0 AND first_search_at IS NOT NULL
+                  AND (air_date IS NULL OR air_date <= date('now'))
+                  AND (
+                    (search_attempts >= ?
+                     AND first_search_at < datetime('now', ?)
+                     AND (air_date IS NULL OR air_date < date('now', ?)))
+                    OR (episode IS NOT NULL AND first_search_at < datetime('now', ?))
+                    OR (episode IS NULL AND first_search_at < datetime('now', ?))
                  )""",
             (WantedState.UNAVAILABLE, WantedState.SEARCHING, max_attempts,
+             f"-{fresh_days} days", f"-{fresh_days} days",
              f"-{tv_days} days", f"-{movie_days} days"),
         )
         count = cursor.rowcount
@@ -420,7 +556,7 @@ class WantedRepo(BaseRepo):
         """
         rows = await self.db.fetch_all(
             """SELECT media_id,
-                      SUM(state IN ('waiting', 'searching')) AS outstanding,
+                      SUM(state IN ('waiting', 'searching', 'unavailable')) AS outstanding,
                       SUM(state = 'watched') AS seen,
                       SUM(state IN ('grabbed', 'downloaded')) AS have,
                       COUNT(*) AS total
@@ -449,7 +585,7 @@ class DownloadRepo(BaseRepo):
         "media_id", "wanted_id", "display_title", "release_name", "indexer", "indexer_id",
         "info_hash", "download_url", "size_bytes", "season", "episode_from", "episode_to",
         "is_season_pack", "resolution", "source", "dynamic_range", "video_codec", "audio",
-        "release_group", "score", "seeders", "state",
+        "release_group", "score", "seeders", "state", "wanted_count",
     )
 
     async def create(self, **values: Any) -> int:
@@ -460,6 +596,7 @@ class DownloadRepo(BaseRepo):
         payload["size_bytes"] = float(values.get("size_bytes") or 0)
         payload["score"] = int(values.get("score") or 0)
         payload["seeders"] = int(values.get("seeders") or 0)
+        payload["wanted_count"] = int(values.get("wanted_count") or 0)
         for key in ("release_name", "indexer", "indexer_id"):
             payload[key] = values.get(key) or ""
         cols = ", ".join(payload)
@@ -502,7 +639,7 @@ class DownloadRepo(BaseRepo):
         return await self.db.fetch_all(
             f"""SELECT d.*, m.poster_path, m.tmdb_id, m.media_type, m.title AS media_title
                 FROM downloads d LEFT JOIN media m ON m.id = d.media_id
-                WHERE d.state IN ({marks}) ORDER BY d.created_at""",
+                WHERE d.state IN ({marks}) AND d.archived = 0 ORDER BY d.created_at""",
             list(states),
         )
 
@@ -540,7 +677,7 @@ class DownloadRepo(BaseRepo):
 
     async def active_count(self) -> int:
         return await self.db.fetch_value(
-            "SELECT COUNT(*) FROM downloads WHERE state = ?",
+            "SELECT COUNT(*) FROM downloads WHERE state = ? AND archived = 0",
             (DownloadState.DOWNLOADING,),
             default=0,
         )
@@ -580,7 +717,7 @@ class DownloadRepo(BaseRepo):
         """Downloads the client has not had for longer than the grace window."""
         return await self.db.fetch_all(
             """SELECT * FROM downloads
-               WHERE state = ? AND missing_since IS NOT NULL
+               WHERE state = ? AND archived = 0 AND missing_since IS NOT NULL
                  AND missing_since <= datetime('now', ?)""",
             (DownloadState.DOWNLOADING, f"-{int(seconds)} seconds"),
         )
@@ -590,6 +727,21 @@ class DownloadRepo(BaseRepo):
             "UPDATE downloads SET info_hash = ?, updated_at = datetime('now') WHERE id = ?",
             (info_hash.lower(), download_id),
         )
+
+    async def set_verified_size(
+        self, download_id: int, size_bytes: float, *, require_approval: bool = False
+    ) -> None:
+        if require_approval:
+            await self.db.execute(
+                """UPDATE downloads SET size_bytes = ?, state = ?,
+                       updated_at = datetime('now') WHERE id = ?""",
+                (size_bytes, DownloadState.PENDING_APPROVAL, download_id),
+            )
+        else:
+            await self.db.execute(
+                "UPDATE downloads SET size_bytes = ?, updated_at = datetime('now') WHERE id = ?",
+                (size_bytes, download_id),
+            )
 
     async def update_progress(self, rows: list[tuple[float, int, float, str, int]]) -> None:
         """Batch progress write: (progress, eta, speed, content_path, id)."""
@@ -603,7 +755,7 @@ class DownloadRepo(BaseRepo):
     async def approve(self, download_id: int) -> bool:
         cursor = await self.db.conn.execute(
             "UPDATE downloads SET state = ?, updated_at = datetime('now') "
-            "WHERE id = ? AND state = ?",
+            "WHERE id = ? AND state = ? AND archived = 0",
             (DownloadState.QUEUED, download_id, DownloadState.PENDING_APPROVAL),
         )
         changed = cursor.rowcount > 0
@@ -616,43 +768,44 @@ class DownloadRepo(BaseRepo):
         marks = ", ".join("?" * len(ids))
         cursor = await self.db.conn.execute(
             f"UPDATE downloads SET state = ?, updated_at = datetime('now') "
-            f"WHERE id IN ({marks}) AND state = ?",
+            f"WHERE id IN ({marks}) AND state = ? AND archived = 0",
             [DownloadState.QUEUED, *ids, DownloadState.PENDING_APPROVAL],
         )
         count = cursor.rowcount
         await cursor.close()
         return max(count, 0)
 
-    async def deny_many(self, ids: list[int]) -> int:
+    async def deny_many(self, ids: list[int]) -> list[Row]:
         if not ids:
-            return 0
+            return []
         marks = ", ".join("?" * len(ids))
-        cursor = await self.db.conn.execute(
+        return await self.db.fetch_all(
             f"UPDATE downloads SET state = ?, updated_at = datetime('now') "
-            f"WHERE id IN ({marks}) AND state = ?",
+            f"WHERE id IN ({marks}) AND state = ? AND archived = 0 "
+            f"RETURNING id, indexer, indexer_id, display_title",
             [DownloadState.DENIED, *ids, DownloadState.PENDING_APPROVAL],
         )
-        count = cursor.rowcount
-        await cursor.close()
-        return max(count, 0)
 
     async def pending_groups(self) -> list[Row]:
         return await self.db.fetch_all(
             """SELECT d.*, m.poster_path, m.tmdb_id, m.media_type, m.title AS media_title
                FROM downloads d LEFT JOIN media m ON m.id = d.media_id
-               WHERE d.state = ? ORDER BY m.sort_title, d.season, d.episode_from""",
+               WHERE d.state = ? AND d.archived = 0
+               ORDER BY m.sort_title, d.season, d.episode_from""",
             (DownloadState.PENDING_APPROVAL,),
         )
 
     async def queued(self) -> list[Row]:
         return await self.db.fetch_all(
-            "SELECT * FROM downloads WHERE state IN (?, ?) ORDER BY score DESC, created_at",
+            """SELECT * FROM downloads WHERE state IN (?, ?) AND archived = 0
+               ORDER BY score DESC, created_at""",
             (DownloadState.QUEUED, DownloadState.NO_SPACE),
         )
 
     async def in_flight(self) -> list[Row]:
         return await self.db.fetch_all(
-            "SELECT * FROM downloads WHERE state = ?", (DownloadState.DOWNLOADING,)
+            "SELECT * FROM downloads WHERE state = ? AND archived = 0",
+            (DownloadState.DOWNLOADING,),
         )
 
     async def completed(self, watched_only: bool = False) -> list[Row]:
