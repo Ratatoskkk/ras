@@ -19,6 +19,7 @@ from ..domain import decisions
 from ..domain.models import WantedState
 from ..logs import get_logger
 from .context import Conduit
+from .library import existing_movie
 
 log = get_logger("calendar")
 
@@ -66,7 +67,10 @@ async def refresh_media(ctx: Conduit, row, *, require_details: bool = False) -> 
 # ---------------------------------------------------------------------------
 async def _refresh_movie(ctx: Conduit, row, tmdb_id: str) -> int:
     media_id = int(row["id"])
-    library_row = await ctx.repos.library.has_movie(tmdb_id)
+    wants = await ctx.repos.wanted.for_media(media_id)
+    if any(want["state"] in (WantedState.DOWNLOADED, WantedState.WATCHED) for want in wants):
+        return 0
+    library_row = await existing_movie(ctx, tmdb_id)
     if library_row:
         wanted_id = await ctx.repos.wanted.upsert(
             media_id=media_id, season=None, episode=None, title=row["title"],

@@ -211,6 +211,16 @@ class WantedRepo(BaseRepo):
             (state, reason, int(bump_attempt), int(bump_attempt), wanted_id),
         )
 
+    async def reopen_watchlisted_movie(self, wanted_id: int, state: str) -> None:
+        await self.db.execute(
+            """UPDATE wanted SET state = ?, reason = NULL, search_attempts = 0,
+                      first_search_at = NULL, last_search_at = NULL,
+                      updated_at = datetime('now')
+               WHERE id = ? AND season IS NULL AND episode IS NULL
+                 AND state IN (?, ?)""",
+            (state, wanted_id, WantedState.DOWNLOADED, WantedState.WATCHED),
+        )
+
     async def reopen_for_download(self, download_id: int, wanted_id: int | None) -> int:
         removed_reason = f"download #{download_id} was removed"
         cursor = await self.db.conn.execute(
@@ -930,6 +940,18 @@ class LibraryRepo(BaseRepo):
     async def has_movie(self, tmdb_id: str) -> Row | None:
         return await self.db.fetch_one(
             "SELECT * FROM library_items WHERE kind = 'movie' AND tmdb_id = ?", (str(tmdb_id),)
+        )
+
+    async def movie_copies(self, tmdb_id: str) -> list[Row]:
+        return await self.db.fetch_all(
+            "SELECT * FROM library_items WHERE kind = 'movie' AND tmdb_id = ? ORDER BY id",
+            (str(tmdb_id),),
+        )
+
+    async def remove_movie_copy(self, rating_key: str) -> None:
+        await self.db.execute(
+            "DELETE FROM library_items WHERE kind = 'movie' AND rating_key = ?",
+            (rating_key,),
         )
 
     async def movie_watched_map(self) -> dict[str, bool]:

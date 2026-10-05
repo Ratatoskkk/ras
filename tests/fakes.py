@@ -153,9 +153,11 @@ class FakePlex:
         self,
         watchlist: list[WatchlistEntry] | None = None,
         library: list[LibraryItem] | None = None,
+        movie_files: dict[str, bool] | None = None,
     ) -> None:
         self._watchlist = watchlist or []
         self._library = library or []
+        self.movie_files = movie_files or {}
         self.removed: list[str] = []
         self.refreshed: list[str] = []
 
@@ -169,6 +171,9 @@ class FakePlex:
 
     async def index_library(self) -> list[LibraryItem]:
         return list(self._library)
+
+    async def movie_file_exists(self, rating_key: str) -> bool:
+        return self.movie_files.get(rating_key, True)
 
     async def refresh_sections(self, media_type: str) -> list[str]:
         self.refreshed.append(media_type)

@@ -106,7 +106,11 @@ before the disk-space check, rather than trusting the tracker's figure.
 Five independent barriers, in the order they apply:
 
 1. **Library mirror** -- anything Plex holds (matched by TMDB id) never becomes
-   a want, so it is never searched for.
+   a want, so it is never searched for. Movie ownership checks verify cached
+   copies through `/library/metadata/{ratingKey}?checkFiles=1`. Confirmed missing
+   copies are removed from the mirror. Only a new watchlist request reopens a
+   watched or downloaded movie; routine refreshes preserve those settled states.
+   Failed checks retain the watchlist request for retry.
 2. **Watched seasons** -- skipped wholesale when `skip_watched_seasons` is on.
 3. **Release keys** -- every `(indexer, indexer_id)` ever grabbed, denied or
    blocklisted is filtered out of candidates, backed by a unique index so a

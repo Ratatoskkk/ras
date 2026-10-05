@@ -368,6 +368,104 @@ class TestWatchlist:
         wants = await ctx.repos.wanted.for_media(int(media[0]["id"]))
         assert wants[0]["state"] == WantedState.DOWNLOADED
 
+    @pytest.mark.parametrize("initial_state, reason", [
+        (WantedState.DOWNLOADED, "present in library"),
+        (WantedState.DOWNLOADED, None),
+        (WantedState.WATCHED, "marked as already seen"),
+    ])
+    async def test_watchlisting_a_deleted_movie_reopens_its_old_want(
+        self, ctx, initial_state, reason
+    ) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="movie", tmdb_id="50839", title="Margin Call"
+        )
+        wanted_id = await ctx.repos.wanted.upsert(
+            media_id=media_id, season=None, episode=None,
+            state=initial_state,
+        )
+        await ctx.repos.wanted.set_state(
+            wanted_id, initial_state, reason=reason, bump_attempt=True
+        )
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="movie", rating_key="ghost", tmdb_id="50839"),
+        ])
+        ctx.plex = FakePlex(
+            watchlist=[WatchlistEntry(
+                rating_key="discover", guid="g", title="Margin Call",
+                media_type="movie", tmdb_id="50839",
+            )],
+            movie_files={"ghost": False},
+        )
+        result = await watchlist.sync_watchlist(ctx)
+        assert result["added"] == 1
+        assert ctx.plex.removed == ["discover"]
+        wanted = await ctx.repos.wanted.get(wanted_id)
+        assert wanted["state"] == WantedState.SEARCHING
+        assert wanted["reason"] is None
+        assert wanted["search_attempts"] == 0
+        assert wanted["last_search_at"] is None
+        assert await ctx.repos.library.has_movie("50839") is None
+        assert [row["id"] for row in await ctx.repos.wanted.due_for_search()] == [wanted_id]
+
+        ctx.plex = FakePlex(
+            library=[LibraryItem(kind="movie", rating_key="ghost", tmdb_id="50839")],
+            movie_files={"ghost": False},
+        )
+        await library.index_library(ctx)
+        await calendar.refresh_media(ctx, await ctx.repos.media.get(media_id))
+        assert (await ctx.repos.wanted.get(wanted_id))["state"] == WantedState.SEARCHING
+
+    async def test_another_existing_movie_copy_still_counts_as_owned(self, ctx) -> None:
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="movie", rating_key="ghost", tmdb_id="50839"),
+            LibraryItem(kind="movie", rating_key="live", tmdb_id="50839"),
+        ])
+        ctx.plex = FakePlex(
+            watchlist=[WatchlistEntry(
+                rating_key="discover", guid="g", title="Margin Call",
+                media_type="movie", tmdb_id="50839",
+            )],
+            movie_files={"ghost": False, "live": True},
+        )
+        await watchlist.sync_watchlist(ctx)
+        media_id = (await ctx.repos.media.list_all())[0]["id"]
+        assert (await ctx.repos.wanted.for_media(media_id))[0]["state"] == WantedState.DOWNLOADED
+
+    async def test_rewatchlisting_a_movie_keeps_its_active_download(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="movie", tmdb_id="50839", title="Margin Call"
+        )
+        wanted_id = await ctx.repos.wanted.upsert(
+            media_id=media_id, season=None, episode=None, state=WantedState.GRABBED
+        )
+        await ctx.repos.wanted.set_state(wanted_id, WantedState.GRABBED, reason="grabbed #1")
+        ctx.plex = FakePlex(watchlist=[WatchlistEntry(
+            rating_key="discover", guid="g", title="Margin Call",
+            media_type="movie", tmdb_id="50839",
+        )])
+        await watchlist.sync_watchlist(ctx)
+        wanted = await ctx.repos.wanted.get(wanted_id)
+        assert wanted["state"] == WantedState.GRABBED
+        assert wanted["reason"] == "grabbed #1"
+        assert await ctx.repos.wanted.due_for_search() == []
+
+    async def test_failed_movie_file_check_keeps_the_watchlist_request(self, ctx) -> None:
+        class UnavailablePlex(FakePlex):
+            async def movie_file_exists(self, rating_key: str) -> bool:
+                raise TransientError("Plex is unavailable")
+
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="movie", rating_key="ghost", tmdb_id="50839"),
+        ])
+        ctx.plex = UnavailablePlex(watchlist=[WatchlistEntry(
+            rating_key="discover", guid="g", title="Margin Call",
+            media_type="movie", tmdb_id="50839",
+        )])
+        result = await watchlist.sync_watchlist(ctx)
+        assert result["failed"] == 1
+        assert ctx.plex.removed == []
+        assert await ctx.repos.library.has_movie("50839")
+
     async def test_one_bad_item_does_not_abort_the_batch(self, ctx) -> None:
         class Exploding(FakePlex):
             async def remove_from_watchlist(self, rating_key: str) -> bool:
@@ -386,6 +484,40 @@ class TestWatchlist:
 
 
 class TestCalendar:
+    @pytest.mark.parametrize("initial_state, reason, expected", [
+        (WantedState.DOWNLOADED, "present in library", WantedState.DOWNLOADED),
+        (WantedState.GRABBED, "grabbed #1", WantedState.GRABBED),
+        (WantedState.WATCHED, "marked as already seen", WantedState.WATCHED),
+        (WantedState.DOWNLOADED, "download completed", WantedState.DOWNLOADED),
+    ])
+    @pytest.mark.parametrize("keep_ghost", [False, True])
+    async def test_refresh_does_not_reopen_a_settled_movie(
+        self, ctx, initial_state, reason, expected, keep_ghost
+    ) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="movie", tmdb_id="50839", title="Margin Call"
+        )
+        wanted_id = await ctx.repos.wanted.upsert(
+            media_id=media_id, season=None, episode=None, state=initial_state
+        )
+        await ctx.repos.wanted.set_state(wanted_id, initial_state, reason=reason)
+        await ctx.repos.library.replace_all([
+            LibraryItem(kind="movie", rating_key="ghost", tmdb_id="50839"),
+        ])
+        ctx.plex = FakePlex(
+            library=[LibraryItem(kind="movie", rating_key="other", tmdb_id="42")],
+            movie_files={"ghost": False},
+        )
+        if keep_ghost:
+            ctx.plex = FakePlex(
+                library=[LibraryItem(kind="movie", rating_key="ghost", tmdb_id="50839")],
+                movie_files={"ghost": False},
+            )
+        await library.index_library(ctx)
+        await calendar.refresh_media(ctx, await ctx.repos.media.get(media_id))
+        assert (await ctx.repos.wanted.get(wanted_id))["state"] == expected
+        assert await ctx.repos.wanted.due_for_search() == []
+
     async def test_expands_a_series_into_episode_wants(self, ctx) -> None:
         ctx.tmdb = FakeTmdb(shows=SILO_TMDB)
         media_id = await ctx.repos.media.upsert(

@@ -1,19 +1,29 @@
 """Plex library indexing.
 
-Everything downstream -- what is missing, what has been watched, what can be
-cleaned up -- reads from this snapshot rather than calling Plex. One scan
-replaces the hundreds of live lookups the reference project made per cycle.
+The snapshot supplies watched state, episode ownership and cleanup decisions.
+Movie requests verify cached copies with Plex before treating them as owned.
+One scan replaces the hundreds of show and season lookups per cycle.
 """
 
 from __future__ import annotations
 
 from datetime import UTC
 
+from ..db.database import Row
 from ..domain.models import EventLevel, LibraryItem
 from ..logs import get_logger
 from .context import Conduit
 
 log = get_logger("library")
+
+
+async def existing_movie(ctx: Conduit, tmdb_id: str) -> Row | None:
+    """Check cached movie copies with Plex before counting them as owned."""
+    for row in await ctx.repos.library.movie_copies(tmdb_id):
+        if ctx.plex is None or await ctx.plex.movie_file_exists(row["rating_key"]):
+            return row
+        await ctx.repos.library.remove_movie_copy(row["rating_key"])
+    return None
 
 
 async def index_library(ctx: Conduit) -> dict[str, int]:
