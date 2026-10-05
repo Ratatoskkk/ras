@@ -217,6 +217,33 @@ class PlexClient:
             return False
 
     # -- Local server -------------------------------------------------------
+    async def movie_file_exists(self, rating_key: str) -> bool:
+        """Reject an owned movie only when Plex confirms its files are gone.
+
+        Section listings retain deleted files and omit their existence flags.
+        Plex supplies those flags on individual metadata with checkFiles=1.
+        """
+        payload = await self.server.get_json(
+            f"/library/metadata/{rating_key}", params={"checkFiles": 1}, allow_404=True
+        )
+        if payload is None:
+            return False
+        items = _metadata(payload)
+        if not items:
+            raise TransientError(f"Plex returned incomplete movie metadata for {rating_key}")
+
+        for item in items:
+            versions = item.get("Media") or []
+            if not versions:
+                return True
+            for version in versions:
+                parts = version.get("Part") or []
+                if not parts or all(
+                    part.get("exists") not in (False, "0", "false") for part in parts
+                ):
+                    return True
+        return False
+
     async def sections(self) -> list[dict[str, Any]]:
         payload = await self.server.get_json("/library/sections")
         directories = _container(payload).get("Directory")

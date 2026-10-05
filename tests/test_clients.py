@@ -6,8 +6,64 @@ import pytest
 
 from conduit.clients.indexers.base import SearchQuery
 from conduit.clients.indexers.unit3d import Unit3dIndexer
+from conduit.clients.plex import PlexClient
 from conduit.config import IndexerConfig
 from conduit.util.resilience import TransientError
+
+
+@pytest.mark.parametrize("media, expected", [
+    ([{"Part": [{"exists": False, "accessible": False}]}], False),
+    ([{"Part": [{"exists": "0"}]}], False),
+    ([{"Part": [{"exists": True, "accessible": False}]}], True),
+    ([{"Part": [{"exists": False}]}, {"Part": [{"exists": True}]}], True),
+    ([{"Part": [{"exists": True}, {"exists": False}]}], False),
+    ([{"Part": [{"file": "/remote/movie.mkv"}]}], True),
+    ([], True),
+])
+async def test_movie_ownership_uses_plex_file_checks(monkeypatch, media, expected) -> None:
+    plex = PlexClient("http://plex.test:32400", "token")
+
+    async def get_json(path, *, params, allow_404):
+        assert path == "/library/metadata/6887"
+        assert params["checkFiles"] == 1
+        assert allow_404 is True
+        return {"MediaContainer": {"Metadata": [{"Media": media}]}}
+
+    monkeypatch.setattr(plex.server, "get_json", get_json)
+    try:
+        assert await plex.movie_file_exists("6887") is expected
+    finally:
+        await plex.aclose()
+
+
+async def test_a_removed_plex_movie_is_missing(monkeypatch) -> None:
+    plex = PlexClient("http://plex.test:32400", "token")
+
+    async def get_json(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(plex.server, "get_json", get_json)
+    try:
+        assert await plex.movie_file_exists("6887") is False
+    finally:
+        await plex.aclose()
+
+
+@pytest.mark.parametrize("payload", [{}, {"MediaContainer": {"Metadata": []}}])
+async def test_an_incomplete_file_check_is_not_proof_a_movie_is_missing(
+    monkeypatch, payload
+) -> None:
+    plex = PlexClient("http://plex.test:32400", "token")
+
+    async def get_json(*args, **kwargs):
+        return payload
+
+    monkeypatch.setattr(plex.server, "get_json", get_json)
+    try:
+        with pytest.raises(TransientError, match="metadata"):
+            await plex.movie_file_exists("6887")
+    finally:
+        await plex.aclose()
 
 
 @pytest.mark.parametrize("payload", [

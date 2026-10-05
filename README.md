@@ -78,8 +78,11 @@ precise about. rás refuses to grab something for five independent reasons,
 each of which is enough on its own.
 
 **1. It is already in Plex.** The library is mirrored locally, matched by TMDB
-id. Anything present is never turned into a "want", so the tracker is never
-even queried for it -- no search, no grab.
+id. Movie requests also ask Plex whether the cached copy's files still exist.
+A leftover entry for a deleted file does not count as owned. Adding a deleted
+movie to the watchlist explicitly requests it again, even if it was watched
+before. Library and calendar refreshes leave watched or downloaded movies
+settled. Anything present is never searched for or grabbed again.
 
 **2. You have already watched that season.** Fully watched seasons are skipped
 entirely (`skip_watched_seasons`).

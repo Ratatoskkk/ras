@@ -15,6 +15,7 @@ from ..domain.models import MediaType, WantedState
 from ..logs import get_logger
 from ..util.text import episode_code
 from .context import Conduit
+from .library import existing_movie
 
 log = get_logger("watchlist")
 
@@ -141,7 +142,7 @@ async def _ingest(ctx: Conduit, entry) -> int | None:
 
 
 async def _want_movie(ctx: Conduit, media_id: int, tmdb_id: str | None, title: str) -> None:
-    if tmdb_id and await ctx.repos.library.has_movie(tmdb_id):
+    if tmdb_id and await existing_movie(ctx, tmdb_id):
         wanted_id = await ctx.repos.wanted.upsert(
             media_id=media_id, season=None, episode=None, title=title,
             state=WantedState.DOWNLOADED,
@@ -161,10 +162,11 @@ async def _want_movie(ctx: Conduit, media_id: int, tmdb_id: str | None, title: s
         WantedState.SEARCHING if found is None or found <= date.today()
         else WantedState.WAITING
     )
-    await ctx.repos.wanted.upsert(
+    wanted_id = await ctx.repos.wanted.upsert(
         media_id=media_id, season=None, episode=None, title=title,
         air_date=air_date, state=state,
     )
+    await ctx.repos.wanted.reopen_watchlisted_movie(wanted_id, state)
     when = f"expected {air_date}" if air_date else "release date unknown"
     await ctx.record("watchlist", f"Wanted: {title} ({when})", media_id=media_id)
 
