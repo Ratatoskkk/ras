@@ -66,6 +66,8 @@ async def monitor_downloads(ctx: Conduit) -> dict[str, int]:
                 level=EventLevel.ERROR,
                 download_id=download_id,
             )
+            ctx.alert("failed", f"{row['display_title']} failed in qBittorrent",
+                      media_id=row.get("media_id"))
             continue
 
         if torrent.is_complete:
@@ -191,6 +193,7 @@ async def _handle_complete(ctx: Conduit, row: dict[str, Any], torrent: TorrentSt
         download_id=download_id,
         data={"save_path": torrent.save_path, "content_path": torrent.content_path},
     )
+    ctx.alert("completed", title, media_id=media_id)
     ctx.bus.publish("download.completed", download_id=download_id, title=title)
     log.info("download complete", extra={"title": title,
                                          "size": human_size(torrent.size_bytes)})

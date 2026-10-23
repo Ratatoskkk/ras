@@ -16,7 +16,7 @@ from ..__init__ import __version__
 from ..config import AppConfig
 from ..domain.models import WantedState
 from ..logs import ring_buffer
-from ..services import calendar, janitor, library, queue, search, state, watchlist
+from ..services import calendar, janitor, library, notify, queue, search, state, watchlist
 from ..services.context import Conduit
 from ..services.supervisor import Supervisor
 
@@ -459,6 +459,21 @@ async def put_config(request: Request, payload: dict[str, Any]) -> dict[str, Any
 # ---------------------------------------------------------------------------
 # Manual triggers
 # ---------------------------------------------------------------------------
+@router.post("/actions/test-tv")
+async def action_test_tv(request: Request, host: str = "") -> dict[str, Any]:
+    ctx = ctx_of(request)
+    target = host.strip() or ctx.config.notifications.tv_host.strip()
+    if not target:
+        raise HTTPException(400, "Enter the TV address first.")
+    if ctx.tv is None:
+        raise HTTPException(503, "Notifications are not running yet.")
+    try:
+        await notify.test(ctx, target)
+    except Exception as exc:
+        raise HTTPException(502, f"The TV did not answer at {target}: {exc}") from exc
+    return {"ok": True}
+
+
 @router.post("/actions/sync-watchlist")
 async def action_sync_watchlist(request: Request) -> dict[str, Any]:
     return await watchlist.sync_watchlist(ctx_of(request))

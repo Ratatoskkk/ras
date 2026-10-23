@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from conduit.clients import pipup
 from conduit.clients.indexers.base import SearchQuery
 from conduit.clients.indexers.unit3d import Unit3dIndexer
 from conduit.clients.plex import PlexClient
@@ -159,3 +160,33 @@ async def test_failed_later_tracker_page_is_not_treated_as_complete_results() ->
             await indexer.search(SearchQuery(media_type="movie", tmdb_id="27205"))
     finally:
         await indexer.aclose()
+
+
+@pytest.mark.parametrize("host, expected", [
+    ("192.168.1.5", "http://192.168.1.5:7979"),
+    ("192.168.1.5:8000", "http://192.168.1.5:8000"),
+    ("http://tv.lan/", "http://tv.lan:7979"),
+])
+def test_pipup_address_forms(host, expected) -> None:
+    assert pipup.base_url(host) == expected
+
+
+async def test_pipup_posts_the_notification_json() -> None:
+    import json
+
+    import respx
+
+    client = pipup.PiPupClient()
+    try:
+        with respx.mock:
+            route = respx.post("http://192.168.1.5:7979/notify").respond(200, text="OK")
+            await client.notify(
+                "192.168.1.5", title="Ready to watch", message="Silo (S01E01)",
+                position="bottom_left", image_url="https://image.tmdb.org/t/p/w342/silo.jpg",
+            )
+        body = json.loads(route.calls[0].request.content)
+        assert body["title"] == "Ready to watch"
+        assert body["position"] == 3
+        assert body["media"]["image"]["uri"].endswith("/silo.jpg")
+    finally:
+        await client.aclose()

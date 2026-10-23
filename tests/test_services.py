@@ -33,7 +33,7 @@ from conduit.services import (
 from conduit.services.context import Conduit
 from conduit.util.resilience import TransientError
 from conftest import make_release
-from fakes import FakeIndexer, FakePlex, FakeQbt, FakeTmdb, pool
+from fakes import FakeIndexer, FakePlex, FakeQbt, FakeTmdb, FakeTv, pool
 
 GIB = 1024**3
 
@@ -1630,6 +1630,65 @@ class TestMonitor:
 
         assert await queue.retry_download(ctx, download_id) is True
         assert (await ctx.repos.wanted.get(wanted_id))["state"] == WantedState.GRABBED
+
+
+class TestTvAlerts:
+    async def _download(self, ctx) -> int:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo", poster_path="/silo.jpg"
+        )
+        return await ctx.repos.downloads.create(
+            media_id=media_id, display_title="Silo (S01E01)",
+            release_name="Silo S01E01 2160p WEB-DL-GRP", indexer="Fake", indexer_id="1",
+            download_url="https://fake.test/download/1", size_bytes=GIB // 4,
+            state=DownloadState.QUEUED,
+        )
+
+    async def _settle(self, ctx) -> None:
+        await asyncio.gather(*ctx._alerts)
+
+    async def test_start_and_finish_pop_up_with_the_poster(self, ctx) -> None:
+        ctx.tv = FakeTv()
+        ctx.config.notifications.tv_host = "192.168.1.5"
+        await self._download(ctx)
+
+        assert (await queue.dispatch_queue(ctx))["sent"] == 1
+        ctx.qbt.complete_all()
+        await monitor.monitor_downloads(ctx)
+        await self._settle(ctx)
+
+        assert [n["title"] for n in ctx.tv.sent] == ["Download started", "Ready to watch"]
+        assert ctx.tv.sent[1]["message"] == "Silo (S01E01)"
+        assert ctx.tv.sent[0]["host"] == "192.168.1.5"
+        assert ctx.tv.sent[0]["image_url"].endswith("/silo.jpg")
+
+    async def test_nothing_is_sent_without_a_tv_address(self, ctx) -> None:
+        ctx.tv = FakeTv()
+        await self._download(ctx)
+        assert (await queue.dispatch_queue(ctx))["sent"] == 1
+        assert ctx._alerts == set()
+        assert ctx.tv.sent == []
+
+    async def test_a_disabled_kind_stays_quiet(self, ctx) -> None:
+        ctx.tv = FakeTv()
+        ctx.config.notifications.tv_host = "192.168.1.5"
+        ctx.config.notifications.on_grab = False
+        await self._download(ctx)
+        assert (await queue.dispatch_queue(ctx))["sent"] == 1
+        ctx.qbt.complete_all()
+        await monitor.monitor_downloads(ctx)
+        await self._settle(ctx)
+        assert [n["title"] for n in ctx.tv.sent] == ["Ready to watch"]
+
+    async def test_a_tv_that_is_off_does_not_hold_up_the_download(self, ctx) -> None:
+        ctx.tv = FakeTv()
+        ctx.tv.fail = True
+        ctx.config.notifications.tv_host = "192.168.1.5"
+        download_id = await self._download(ctx)
+        assert (await queue.dispatch_queue(ctx))["sent"] == 1
+        await self._settle(ctx)
+        row = await ctx.repos.downloads.get(download_id)
+        assert row["state"] == DownloadState.DOWNLOADING
 
 
 class TestJanitor:

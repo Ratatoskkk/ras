@@ -16,11 +16,13 @@ from typing import Any
 
 from ..clients import PlexClient, QBittorrentClient, TmdbClient
 from ..clients.indexers import IndexerPool, build_indexer
+from ..clients.pipup import PiPupClient
 from ..config import AppConfig, ConfigStore, Settings, get_settings
 from ..db.database import Database
 from ..db.repo import Repos
 from ..domain.models import EventLevel
 from ..logs import get_logger
+from . import notify
 from .bus import EventBus
 
 log = get_logger("context")
@@ -46,6 +48,7 @@ class Conduit:
         self.plex: PlexClient | None = None
         self.tmdb: TmdbClient | None = None
         self.qbt: QBittorrentClient | None = None
+        self.tv: PiPupClient | None = None
         self.indexers = IndexerPool([])
 
         # Set by the web app once the supervisor exists. Lets a service ask for
@@ -57,6 +60,7 @@ class Conduit:
         # asyncio keeps only a weak reference to a running task, so a
         # fire-and-forget close can be collected before it finishes.
         self._closing: set[asyncio.Task] = set()
+        self._alerts: set[asyncio.Task] = set()
 
     # -- config -------------------------------------------------------------
     @property
@@ -84,6 +88,7 @@ class Conduit:
             self.settings.qbittorrent_username,
             self.settings.qbittorrent_password,
         )
+        self.tv = PiPupClient()
         self.rebuild_indexers()
 
         await self.db.set_meta("started_at", self.started_at.isoformat())
@@ -97,7 +102,7 @@ class Conduit:
         )
 
     async def stop(self) -> None:
-        closers = [c.aclose() for c in (self.plex, self.tmdb, self.qbt) if c is not None]
+        closers = [c.aclose() for c in (self.plex, self.tmdb, self.qbt, self.tv) if c is not None]
         closers.append(self.indexers.aclose())
         await asyncio.gather(*closers, return_exceptions=True)
         await self.db.close()
@@ -167,6 +172,20 @@ class Conduit:
                 download_id=download_id,
                 data=data or {},
             )
+
+    def alert(self, kind: str, text: str, *, media_id: int | None = None) -> None:
+        """Pop up ``text`` on the TV, if one is configured. Never blocks or raises."""
+        if not notify.wanted(self, kind):
+            return
+        task = asyncio.create_task(self._send_alert(kind, text, media_id))
+        self._alerts.add(task)
+        task.add_done_callback(self._alerts.discard)
+
+    async def _send_alert(self, kind: str, text: str, media_id: int | None) -> None:
+        try:
+            await notify.send(self, kind, text, media_id=media_id)
+        except Exception as exc:
+            log.info("tv alert not delivered", extra={"kind": kind, "err": str(exc)})
 
     async def health(self) -> dict[str, Any]:
         checks: dict[str, Any] = {

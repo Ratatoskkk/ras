@@ -340,9 +340,15 @@ class IndexerConfig(BaseModel):
 
 
 class NotificationConfig(BaseModel):
-    """Optional outbound webhooks. Disabled unless a URL is supplied."""
+    """Outbound alerts. TV pop-ups are disabled unless ``tv_host`` is set."""
 
     webhook_url: str = ""
+    # PiPup on an Android / Google TV: an IP, ``ip:port`` or full URL.
+    tv_host: str = ""
+    tv_duration_seconds: int = Field(default=12, ge=3, le=120)
+    tv_position: Literal["top_right", "top_left", "bottom_right", "bottom_left", "center"] = (
+        "top_right"
+    )
     on_grab: bool = True
     on_complete: bool = True
     on_error: bool = True

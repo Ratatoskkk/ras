@@ -83,6 +83,8 @@ async def _dispatch_queue(ctx: Conduit) -> dict[str, int]:
                 level=EventLevel.ERROR,
                 download_id=int(row["id"]),
             )
+            ctx.alert("failed", f"Could not start {row['display_title']}",
+                      media_id=row.get("media_id"))
 
     if sent:
         ctx.bus.publish("queue.dispatched", sent=sent)
@@ -129,6 +131,8 @@ async def _dispatch_one(
             level=EventLevel.WARNING,
             download_id=download_id,
         )
+        ctx.alert("approval", f"{title} — {human_size(size_bytes)}",
+                  media_id=row.get("media_id"))
         ctx.bus.publish("download.updated", download_id=download_id)
         return False
 
@@ -150,6 +154,7 @@ async def _dispatch_one(
                 level=EventLevel.WARNING,
                 download_id=download_id,
             )
+            ctx.alert("failed", f"No room for {title}", media_id=row.get("media_id"))
         return False
 
     own_tag = f"{policy.torrent_tag_prefix}_{download_id}"
@@ -177,6 +182,7 @@ async def _dispatch_one(
             level=EventLevel.ERROR, media_id=row.get("media_id"),
             download_id=download_id,
         )
+        ctx.alert("failed", f"Could not start {title}", media_id=row.get("media_id"))
         return False
 
     info_hash = info_hash or landed
@@ -197,6 +203,7 @@ async def _dispatch_one(
         download_id=download_id,
         data={"drive": drive.path, "info_hash": info_hash, "size_bytes": size_bytes},
     )
+    ctx.alert("started", f"{title} — {human_size(size_bytes)}", media_id=row.get("media_id"))
     log.info("sent to client", extra={"title": title, "drive": drive.path,
                                       "size": human_size(size_bytes)})
     return True

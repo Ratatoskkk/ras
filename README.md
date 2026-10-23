@@ -261,6 +261,38 @@ individual episodes it replaces.
 
 ---
 
+## TV notifications
+
+rás can pop up a notice on an Android TV or Google TV -- poster, heading and
+title, over whatever is playing -- when a download starts, finishes, runs into
+a problem, or needs your approval.
+
+The TV needs [PiPup](https://github.com/lapicidae/PiPup), a small app that
+draws notifications sent to it over the network. With developer options and
+network debugging on, from the PC:
+
+```bash
+adb connect 192.168.1.5:5555
+adb install -r PiPup.apk
+adb shell appops set nl.rogro82.pipup SYSTEM_ALERT_WINDOW allow
+adb shell dumpsys deviceidle whitelist +nl.rogro82.pipup
+```
+
+The APK is on the project's
+[releases page](https://github.com/lapicidae/PiPup/releases) (use the
+`prerelease` build). Open PiPup once on the TV so it starts listening on port
+7979.
+
+Then enter the TV's address under **Settings -> TV notifications**, press
+**Send test**, and save. Give the TV a reserved address on your router so it
+does not move. Each event type has its own switch.
+
+Pop-ups are fire-and-forget: one four-second attempt, in the background. A TV
+that is off or asleep simply misses them -- nothing in the pipeline waits on
+it, and nothing is retried.
+
+---
+
 ## The dashboard
 
 | Page | What it is for |
@@ -270,7 +302,7 @@ individual episodes it replaces.
 | **Calendar** | A month grid with posters on the day each release lands — click a day for the detail. *Agenda* mode keeps the old countdown list, with the aired-but-missing backlog behind a toggle |
 | **Library** | Everything followed, with per-title search, release inspection, and the reclaim-space view |
 | **Activity** | The event timeline, the application log, and per-task health with manual triggers |
-| **Settings** | Policy, profiles, trackers and timings -- validated before they are saved |
+| **Settings** | Policy, profiles, trackers, timings and TV notifications -- validated before they are saved |
 
 State is pushed over a WebSocket, so nothing polls. Progress bars interpolate
 between server updates from the reported speed, so they move smoothly instead
@@ -381,13 +413,13 @@ ras/
 |-- src/conduit/
 |   |-- config.py            # settings + quality profiles
 |   |-- logs.py              # console, file and in-memory logging
-|   |-- clients/             # Plex, TMDB, qBittorrent, tracker clients
+|   |-- clients/             # Plex, TMDB, qBittorrent, tracker and PiPup (TV) clients
 |   |-- domain/              # release parsing, scoring, decisions (pure, no I/O)
 |   |-- db/                  # schema migrations and repositories
-|   |-- services/            # watchlist, calendar, search, queue, monitor, janitor
+|   |-- services/            # watchlist, calendar, search, queue, monitor, janitor, notify
 |   |-- web/                 # FastAPI app, REST API, WebSocket
 |   `-- static/              # the dashboard (plain ES modules and CSS)
-`-- tests/                   # 267 tests, no network required
+`-- tests/                   # 359 tests, no network required
 ```
 
 ---

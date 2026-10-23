@@ -56,6 +56,13 @@ const INTERVAL_FIELDS = [
   ['housekeeping', 'Housekeeping'],
 ];
 
+const TV_TOGGLES = [
+  ['on_grab', 'Download started'],
+  ['on_complete', 'Download finished'],
+  ['on_error', 'Download problem'],
+  ['on_approval_required', 'Needs approval'],
+];
+
 const CALENDAR_FIELDS = [
   ['fresh_window_days', 'Fresh window (days)', 'Recent airings get the aggressive poll.'],
   ['give_up_days_tv', 'Slow checks: episodes (days)', 'After this many days of searching, check once daily.'],
@@ -122,6 +129,18 @@ export default {
       config.indexers.splice(Number(target.dataset.index), 1);
       dirty = true;
       paint(root);
+      return true;
+    }
+    if (action === 'test-tv') {
+      target.disabled = true;
+      try {
+        await api.action('test-tv', { host: config.notifications.tv_host });
+        toast('Sent — check the TV', 'ok');
+      } catch (error) {
+        toast(error.message, 'err');
+      } finally {
+        target.disabled = false;
+      }
       return true;
     }
     if (action === 'format-profiles') {
@@ -256,6 +275,22 @@ function paint(root) {
                  'Automatically follow series you are watching in Plex',
                  config.calendar.track_watched_shows)}
       </div>`)}
+
+    ${card('TV notifications', html`
+      <div class="card__body stack">
+        <div class="formgrid">
+          ${field('notifications.tv_host', 'TV address', 'text', config.notifications.tv_host)}
+          ${field('notifications.tv_duration_seconds', 'Seconds on screen', 'number',
+                  config.notifications.tv_duration_seconds)}
+          ${select('notifications.tv_position', 'Position', config.notifications.tv_position,
+                   ['top_right', 'top_left', 'bottom_right', 'bottom_left', 'center'])}
+        </div>
+        <div class="stack" style="gap:9px">
+          ${TV_TOGGLES.map(([key, label]) =>
+            toggle(`notifications.${key}`, label, config.notifications[key]))}
+        </div>
+      </div>`,
+      html`<button class="btn btn--sm" data-action="test-tv">Send test</button>`)}
 
     ${card('Environment', html`
       <div class="card__body stack" style="gap:8px">

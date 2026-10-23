@@ -547,6 +547,9 @@ async def _create_download(
             "alternatives": alternatives,
         },
     )
+    if approval.required:
+        ctx.alert("approval", f"{display} — {human_size(release.size_bytes)}",
+                  media_id=media_id)
     ctx.bus.publish(
         "download.created", download_id=download_id, state=str(state), title=display
     )

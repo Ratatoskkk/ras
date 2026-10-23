@@ -221,3 +221,19 @@ class FakeTmdb:
 
     def health(self) -> dict[str, Any]:
         return {"name": "tmdb", "state": "closed"}
+
+
+class FakeTv:
+    """Records pop-ups instead of drawing them; ``fail`` mimics a TV that is off."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.fail = False
+
+    async def notify(self, host: str, **kwargs: Any) -> None:
+        if self.fail:
+            raise ConnectionError("TV is off")
+        self.sent.append({"host": host, **kwargs})
+
+    async def aclose(self) -> None:
+        return None

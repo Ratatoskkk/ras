@@ -37,6 +37,10 @@ class TestEndpoints:
         response = await client.get(path)
         assert response.status_code == 200
 
+    async def test_tv_test_needs_an_address(self, client) -> None:
+        response = await client.post("/api/actions/test-tv")
+        assert response.status_code == 400
+
     async def test_state_has_the_shape_the_dashboard_expects(self, client) -> None:
         payload = (await client.get("/api/state")).json()
         for key in ("summary", "downloads", "pending_groups", "upcoming", "drives",
