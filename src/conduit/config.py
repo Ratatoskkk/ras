@@ -639,8 +639,14 @@ class ConfigStore:
             self._config = load_config(self.path)
             self._mtime = mtime
             return True
-        except Exception:  # keep serving the last good config
+        except Exception as exc:  # keep serving the last good config
             self._mtime = mtime
+            import logging
+
+            logging.getLogger("conduit.config").error(
+                "conduit.toml is invalid; keeping the last good config",
+                extra={"path": str(self.path), "err": str(exc)},
+            )
             return False
 
     def replace(self, config: AppConfig) -> None:

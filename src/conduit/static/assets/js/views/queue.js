@@ -40,8 +40,7 @@ export default {
       ${card(`${items.length} download${items.length === 1 ? '' : 's'}`,
         items.length
           ? html`<div class="list">${items.map((d) => downloadRow(d, store.progressOf(d)))}</div>`
-          : emptyState('◌', 'Nothing here',
-                       filter === 'all' ? 'Grabs will appear as they are found.' : 'Try another filter.'))}
+          : emptyState('◌', 'Nothing here'))}
 
       ${card('History',
         html`<div class="tablewrap" id="history-host">${emptyState('…', 'Loading…')}</div>`,

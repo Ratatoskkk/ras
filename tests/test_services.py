@@ -1494,6 +1494,50 @@ class TestMonitor:
         assert (await ctx.repos.wanted.get(wanted_id))["state"] == WantedState.GRABBED
         assert ctx.plex.refreshed == ["show"]
 
+    async def test_monitor_asks_the_client_only_for_tracked_torrents(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        await ctx.repos.downloads.create(
+            media_id=media_id, display_title="Silo (S01E01)", indexer="Fake",
+            indexer_id="1", download_url="https://fake.test/1", size_bytes=GIB,
+            season=1, episode_from=1, episode_to=1, state=DownloadState.QUEUED,
+        )
+        await queue.dispatch_queue(ctx)
+        ctx.qbt.listings.clear()
+
+        result = await monitor.monitor_downloads(ctx)
+
+        assert result["lost"] == 0
+        assert len(ctx.qbt.listings) == 1
+        assert ctx.qbt.listings[0].get("hashes")
+
+    async def test_a_plex_outage_does_not_abort_completion_handling(self, ctx) -> None:
+        media_id = await ctx.repos.media.upsert(
+            media_type="show", tmdb_id="125988", title="Silo"
+        )
+        ids = []
+        for n in (1, 2):
+            ids.append(await ctx.repos.downloads.create(
+                media_id=media_id, display_title=f"Silo (S01E0{n})",
+                indexer="Fake", indexer_id=str(n), download_url=f"https://fake.test/{n}",
+                size_bytes=GIB, season=1, episode_from=n, episode_to=n,
+                state=DownloadState.QUEUED,
+            ))
+        await queue.dispatch_queue(ctx)
+        ctx.qbt.complete_all()
+
+        async def plex_down(media_type: str) -> list[str]:
+            raise TransientError("plex-server: ConnectError")
+
+        ctx.plex.refresh_sections = plex_down
+        result = await monitor.monitor_downloads(ctx)
+
+        assert result["completed"] == 2
+        for download_id in ids:
+            row = await ctx.repos.downloads.get(download_id)
+            assert row["state"] == DownloadState.COMPLETED
+
     async def _in_flight(self, ctx) -> tuple[int, int]:
         media_id = await ctx.repos.media.upsert(
             media_type="show", tmdb_id="125988", title="Silo"
@@ -1859,6 +1903,21 @@ class TestSeedingAwareReclaim:
         assert candidates[0]["seed_satisfied"] is False
         assert "seeding left" in candidates[0]["seed_reason"]
         assert 0 < candidates[0]["seed_progress"] < 1
+
+    async def test_a_stalled_client_does_not_hold_the_reclaim_page(
+        self, ctx, monkeypatch
+    ) -> None:
+        await self._watched_download(ctx, seeded_seconds=6 * 86400)
+
+        async def hang(**kwargs):
+            await asyncio.sleep(30)
+            return []
+
+        monkeypatch.setattr(janitor, "CLIENT_READ_TIMEOUT", 0.05)
+        ctx.qbt.torrents = hang
+        candidate = (await janitor.cleanup_candidates(ctx))[0]
+        assert candidate["seed_satisfied"] is False
+        assert candidate["seed_reason"] == "seeding state unavailable"
 
     async def test_seed_goal_met_is_offered(self, ctx) -> None:
         await self._watched_download(ctx, seeded_seconds=6 * 86400)

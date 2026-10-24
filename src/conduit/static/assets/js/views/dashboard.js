@@ -5,6 +5,13 @@ import {
 import { store } from '../store.js';
 import { bytes, dayLabel, episodeCode, html, relativeTime, setHTML } from '../util.js';
 
+// Held between renders: the dashboard repaints on every live state push, and
+// each repaint used to blank these back to "Loading…" and fold up any release
+// list someone had opened.
+let activityCache = null;
+let accountsCache = null;
+const openDetails = new Set();
+
 export default {
   id: 'dashboard',
   title: 'Dashboard',
@@ -20,6 +27,10 @@ export default {
     const now = new Date();
     const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'),
                    String(now.getDate()).padStart(2, '0')].join('-');
+    for (const node of root.querySelectorAll('details[data-key]')) {
+      if (node.open) openDetails.add(node.dataset.key);
+      else openDetails.delete(node.dataset.key);
+    }
     const scheduled = store.upcoming.filter((item) => item.air_date?.slice(0, 10) >= today);
     const next = scheduled.slice(0, 5);
     const later = scheduled.slice(5, 8);
@@ -27,10 +38,7 @@ export default {
     setHTML(root, html`
       <section class="program" aria-labelledby="program-title">
         <div class="program__head">
-          <div>
-            <h2 id="program-title">Coming up</h2>
-            <p>${s.upcoming ?? 0} tracked releases</p>
-          </div>
+          <h2 id="program-title">Coming up</h2>
           <a class="btn btn--sm" href="#/calendar">Open calendar</a>
         </div>
         ${next.length ? html`
@@ -49,11 +57,11 @@ export default {
       </section>
 
       <div class="status-board" aria-label="Current status">
-        ${statusCell('Downloading', s.downloading ?? 0, active.length ? 'in flight now' : 'idle', 'status-board__cell--active')}
-        ${statusCell('Awaiting you', s.pending_approval ?? 0, 'approvals')}
-        ${statusCell('Queued', s.queued ?? 0, 'ready to start')}
+        ${statusCell('Downloading', s.downloading ?? 0, '', active.length ? 'status-board__cell--active' : '')}
+        ${statusCell('Awaiting you', s.pending_approval ?? 0)}
+        ${statusCell('Queued', s.queued ?? 0)}
         ${statusCell('Completed', s.completed ?? 0, s.library_size || '0 B')}
-        ${statusCell('Problems', (s.failed ?? 0) + (s.no_space ?? 0), 'failed or out of space',
+        ${statusCell('Problems', (s.failed ?? 0) + (s.no_space ?? 0), '',
                      ((s.failed ?? 0) + (s.no_space ?? 0)) ? 'status-board__cell--fault' : '')}
       </div>
 
@@ -61,21 +69,13 @@ export default {
 
       ${continuations.length ? html`
         <div class="stack">
-          <div class="sectionhead">
-            <h2>Ready when you are</h2>
-            <span class="sectionhead__note">
-              the next season of something you already watch — it waits here until you start it
-            </span>
-          </div>
+          <div class="sectionhead"><h2>Ready when you are</h2></div>
           <div class="approval-grid">${continuations.map(continuationCard)}</div>
         </div>` : ''}
 
       ${fresh.length ? html`
         <div class="stack">
-          <div class="sectionhead">
-            <h2>Needs your approval</h2>
-            <span class="sectionhead__note">new titles, and anything over the size gate</span>
-          </div>
+          <div class="sectionhead"><h2>Needs your approval</h2></div>
           <div class="approval-grid">${fresh.map(approvalCard)}</div>
         </div>` : ''}
 
@@ -84,20 +84,19 @@ export default {
           ${card('Active downloads',
             active.length
               ? html`<div class="list">${active.map((d) => downloadRow(d, store.progressOf(d)))}</div>`
-              : emptyState('◌', 'Nothing downloading',
-                           'Approved grabs start automatically when a slot frees up.'),
+              : emptyState('◌', 'Nothing downloading'),
             html`<button class="btn btn--sm btn--ghost" data-action="sync-watchlist">Check watchlist</button>
                  <button class="btn btn--sm" data-action="dispatch">Run queue now</button>`)}
 
           ${card('Recent activity',
-            html`<div class="list" id="dash-activity">${emptyState('…', 'Loading…')}</div>`,
+            html`<div class="list" id="dash-activity">${activityCache ?? emptyState('…', 'Loading…')}</div>`,
             html`<a class="btn btn--sm btn--ghost" href="#/activity">View all</a>`)}
         </div>
 
         <div class="stack">
           ${card('Tracker account',
             html`<div class="card__body stack" style="gap:8px" id="dash-accounts">
-              <span class="muted">Loading…</span>
+              ${accountsCache ?? html`<span class="muted">Loading…</span>`}
             </div>`)}
           ${card('Storage', html`<div class="card__body">${store.drives.map(driveRow)}</div>`)}
           ${later.length ? card('Later on',
@@ -189,11 +188,11 @@ function unmatchedCard() {
     </section>`;
 }
 
-function statusCell(label, value, hint, cls = '') {
+function statusCell(label, value, detail = '', cls = '') {
   return html`
     <div class="status-board__cell ${cls}">
       <span class="status-board__value">${value}</span>
-      <span class="status-board__text"><strong>${label}</strong><small>${hint}</small></span>
+      <span class="status-board__text"><strong>${label}</strong>${detail ? html`<small>${detail}</small>` : ''}</span>
     </div>`;
 }
 
@@ -220,7 +219,6 @@ function featureRelease(item) {
       <div class="program__feature-copy">
         <h3>${item.title}</h3>
         ${code ? html`<p>${code}${item.episode_title ? ` · ${item.episode_title}` : ''}</p>` : ''}
-        <span>View this date in Calendar</span>
       </div>
     </a>`;
 }
@@ -254,8 +252,9 @@ function pendingRow(item) {
 }
 
 function approvalDetails(group) {
+  const key = String(group.media_id ?? group.title);
   return group.items.length > 1
-    ? html`<details class="approval__details">
+    ? html`<details class="approval__details" data-key="${key}" ${openDetails.has(key) ? 'open' : ''}>
         <summary>Review ${group.items.length} releases</summary>
         <div>${group.items.map(pendingRow)}</div>
       </details>`
@@ -377,15 +376,20 @@ function systemRows() {
 }
 
 async function loadAccounts(root) {
-  const host = root.querySelector('#dash-accounts');
-  if (!host) return;
   try {
     const accounts = await api.accounts();
-    if (!accounts.length) {
-      setHTML(host, html`<span class="faint">No tracker reachable.</span>`);
-      return;
-    }
-    setHTML(host, html`${accounts.map((a) => html`
+    accountsCache = accounts.length
+      ? html`${accounts.map(accountBlock)}`
+      : html`<span class="faint">No tracker reachable.</span>`;
+  } catch {
+    accountsCache ??= html`<span class="faint">Tracker unreachable.</span>`;
+  }
+  const host = root.querySelector('#dash-accounts');
+  if (host) setHTML(host, accountsCache);
+}
+
+function accountBlock(a) {
+  return html`
       <div class="stack" style="gap:6px">
         <div class="row">
           <strong>${a.indexer}</strong>
@@ -405,18 +409,15 @@ async function loadAccounts(root) {
           ? html`<div class="row"><span class="muted grow">Hit and runs</span>
                    <span class="mono" style="color:var(--warn)">${a.hit_and_runs}</span></div>`
           : ''}
-      </div>`)}`);
-  } catch {
-    setHTML(host, html`<span class="faint">Tracker unreachable.</span>`);
-  }
+      </div>`;
 }
 
 async function loadActivity(root) {
   try {
-    const events = await api.events({ limit: 12 });
-    const host = root.querySelector('#dash-activity');
-    if (!host) return;
-    setHTML(host, events.length
+    // Search misses are logged at debug level, one per episode per pass; on
+    // a short feed they pushed every grab and completion off the bottom.
+    const events = await api.events({ limit: 12, hide_debug: true });
+    activityCache = events.length
       ? html`${events.map((e) => html`
           <div class="event event--${e.level}">
             <span class="event__time">${relativeTime(e.ts)}</span>
@@ -424,6 +425,10 @@ async function loadActivity(root) {
               <span class="event__cat">${e.category}</span>${e.message}
             </span>
           </div>`)}`
-      : emptyState('·', 'No activity yet'));
-  } catch { /* the card just stays on its loading state */ }
+      : emptyState('·', 'No activity yet');
+  } catch {
+    return; // keep whatever the card is showing
+  }
+  const host = root.querySelector('#dash-activity');
+  if (host) setHTML(host, activityCache);
 }

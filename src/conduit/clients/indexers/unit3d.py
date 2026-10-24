@@ -87,19 +87,16 @@ class Unit3dIndexer:
         if not (query.tmdb_id or query.imdb_id or query.title):
             return []
 
-        cache_key = f"idx:{self.name}:{query.cache_key}"
-        if self.cache is not None:
-            cached = await self.cache.get(cache_key)
-            if cached is not None:
-                return [_release_from_cache(self.name, row, self.score_bonus) for row in cached]
-
-        rows = await self._fetch(query)
+        rows = await self._cached_fetch(query)
 
         # A season-scoped query can come back empty simply because the tracker
         # tags packs differently. Retry once without the season filter so the
-        # local parser gets a chance to find the pack itself.
+        # local parser gets a chance to find the pack itself. The unscoped
+        # query is cached under its own key: a show with eight missing
+        # episodes asks it eight times in one pass, and every one of those
+        # used to go to the tracker, against a 30-a-minute budget.
         if not rows and query.season is not None:
-            rows = await self._fetch(
+            rows = await self._cached_fetch(
                 SearchQuery(
                     media_type=query.media_type,
                     tmdb_id=query.tmdb_id,
@@ -108,10 +105,18 @@ class Unit3dIndexer:
                     year=query.year,
                 )
             )
+        return [_release_from_cache(self.name, row, self.score_bonus) for row in rows]
 
+    async def _cached_fetch(self, query: SearchQuery) -> list[dict[str, Any]]:
+        cache_key = f"idx:{self.name}:{query.cache_key}"
+        if self.cache is not None:
+            cached = await self.cache.get(cache_key)
+            if cached is not None:
+                return cached
+        rows = await self._fetch(query)
         if self.cache is not None:
             await self.cache.set(cache_key, rows, SEARCH_TTL if rows else EMPTY_TTL)
-        return [_release_from_cache(self.name, row, self.score_bonus) for row in rows]
+        return rows
 
     async def _fetch(self, query: SearchQuery) -> list[dict[str, Any]]:
         # Parameter names are UNIT3D's, verbatim. `perPage` is capped at 100

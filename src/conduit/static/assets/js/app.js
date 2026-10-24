@@ -18,6 +18,7 @@ const BY_ID = Object.fromEntries(VIEWS.map((view) => [view.id, view]));
 const THEME_KEY = 'conduit.theme';
 
 let current = null;
+let viewRoot = null;
 let frame = null;
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,19 @@ let frame = null;
 function routeId() {
   const id = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('/')[0];
   return BY_ID[id] ? id : 'dashboard';
+}
+
+/**
+ * A fresh container for every route render. Views await the API before they
+ * paint; with one shared element, a slow response from the page you just left
+ * painted itself over the page you moved to. Now it lands in a detached node.
+ */
+function freshViewRoot() {
+  const node = document.createElement('div');
+  node.className = 'view';
+  $('#view').replaceChildren(node);
+  viewRoot = node;
+  return node;
 }
 
 async function renderRoute() {
@@ -37,14 +51,16 @@ async function renderRoute() {
   document.title = view.id === 'dashboard' ? 'rás' : `${view.title} · rás`;
   renderNav();
 
-  const root = $('#view');
+  const root = freshViewRoot();
+  $('#view').focus({ preventScroll: true });
+  closeRailOnMobile();
   try {
     await view.render(root);
   } catch (error) {
-    setHTML(root, html`<div class="card"><div class="empty">${error.message}</div></div>`);
+    if (root.isConnected) {
+      setHTML(root, html`<div class="card"><div class="empty">${error.message}</div></div>`);
+    }
   }
-  root.focus({ preventScroll: true });
-  closeRailOnMobile();
 }
 
 function renderNav() {
@@ -135,7 +151,7 @@ document.addEventListener('click', async (event) => {
   event.preventDefault();
 
   try {
-    if (await current?.onAction?.(action, target, $('#view'))) return;
+    if (await current?.onAction?.(action, target, viewRoot)) return;
     if (GLOBAL_ACTIONS[action]) await GLOBAL_ACTIONS[action](target);
   } catch (error) {
     toast(error.message || 'Something went wrong', 'err');
@@ -146,7 +162,7 @@ document.addEventListener('click', async (event) => {
 const onFieldEvent = (event) => {
   const target = event.target.closest('[data-action]');
   if (!target) return;
-  current?.onInput?.(target.dataset.action, target, $('#view'));
+  current?.onInput?.(target.dataset.action, target, viewRoot);
 };
 document.addEventListener('input', onFieldEvent);
 document.addEventListener('change', onFieldEvent);
@@ -201,7 +217,7 @@ function scheduleProgressPaint() {
   if (frame) return;
   const paint = () => {
     frame = null;
-    if (current?.onProgress) current.onProgress($('#view'));
+    if (current?.onProgress && viewRoot) current.onProgress(viewRoot);
     if (store.summary.downloading) scheduleProgressPaint();
   };
   frame = requestAnimationFrame(() => setTimeout(paint, 200));
@@ -212,7 +228,7 @@ store.on('state', () => {
   renderStatus();
   // Views that cache their own data reload it on the next visit.
   if (current && ['dashboard', 'queue', 'calendar'].includes(current.id)) {
-    current.render($('#view'));
+    current.render(viewRoot);
   }
   scheduleProgressPaint();
 });

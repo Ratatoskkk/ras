@@ -67,6 +67,7 @@ class FakeQbt:
         self.added: list[dict[str, Any]] = []
         self.torrents_list: list[TorrentStatus] = []
         self.deleted: list[tuple[list[str], bool]] = []
+        self.listings: list[dict[str, Any]] = []
         self.file_adds_never_land = False
         # The real client answers "Ok." to a URL add and then fetches it in the
         # background, so the torrent can never materialise. Set this to model a
@@ -80,10 +81,14 @@ class FakeQbt:
         return None
 
     async def torrents(self, **kwargs: Any) -> list[TorrentStatus]:
-        tag = kwargs.get("tag")
-        if tag:
-            return [t for t in self.torrents_list if tag in t.tags]
-        return list(self.torrents_list)
+        self.listings.append(kwargs)
+        found = list(self.torrents_list)
+        if kwargs.get("tag"):
+            found = [t for t in found if kwargs["tag"] in t.tags]
+        if kwargs.get("hashes"):
+            wanted = {h.lower() for h in kwargs["hashes"]}
+            found = [t for t in found if t.info_hash in wanted]
+        return found
 
     async def torrents_by_hash(self, hashes: list[str]) -> dict[str, TorrentStatus]:
         wanted = {h.lower() for h in hashes}

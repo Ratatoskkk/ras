@@ -96,17 +96,39 @@ def encode(value: Any) -> bytes:
     raise BencodeError(f"cannot encode {type(value).__name__}")
 
 
-def info_hash(torrent_bytes: bytes) -> str:
-    """SHA-1 info-hash (hex, lowercase) -- the id qBittorrent uses for v1 torrents.
+def _decode_with_info_span(data: bytes) -> tuple[dict[bytes, Any], tuple[int, int]]:
+    """Decode a torrent and locate the raw bytes of its ``info`` value.
 
-    Re-encoding the parsed ``info`` dict is safe here because bencode
-    dictionaries are canonically sorted, so the round trip is byte-identical
-    for any well-formed torrent.
+    The info-hash is the SHA-1 of those exact bytes. Re-encoding the parsed
+    dict only reproduces them when the original keys were canonically sorted,
+    and real trackers do serve torrents that are not -- qBittorrent would then
+    know the torrent by a different hash than the one recorded here.
     """
-    parsed = decode(torrent_bytes)
-    if not isinstance(parsed, dict) or b"info" not in parsed:
+    if data[:1] != b"d":
+        raise BencodeError("torrent file is not a dictionary")
+    i = 1
+    mapping: dict[bytes, Any] = {}
+    span: tuple[int, int] | None = None
+    while data[i : i + 1] != b"e":
+        if i >= len(data):
+            raise BencodeError("unexpected end of input")
+        key, i = _decode_at(data, i)
+        if not isinstance(key, bytes):
+            raise BencodeError("dictionary key must be a byte string")
+        start = i
+        value, i = _decode_at(data, i)
+        mapping[key] = value
+        if key == b"info":
+            span = (start, i)
+    if span is None or not isinstance(mapping.get(b"info"), dict):
         raise BencodeError("torrent file has no info dictionary")
-    return hashlib.sha1(encode(parsed[b"info"])).hexdigest()
+    return mapping, span
+
+
+def info_hash(torrent_bytes: bytes) -> str:
+    """SHA-1 info-hash (hex, lowercase) -- the id qBittorrent uses for v1 torrents."""
+    _, (start, end) = _decode_with_info_span(torrent_bytes)
+    return hashlib.sha1(torrent_bytes[start:end]).hexdigest()
 
 
 def torrent_summary(torrent_bytes: bytes) -> dict[str, Any]:
@@ -115,12 +137,8 @@ def torrent_summary(torrent_bytes: bytes) -> dict[str, Any]:
     Trackers occasionally report a size that excludes padding files; reading it
     from the torrent itself gives an accurate figure for the disk-space check.
     """
-    parsed = decode(torrent_bytes)
-    if not isinstance(parsed, dict):
-        raise BencodeError("torrent file is not a dictionary")
-    info = parsed.get(b"info")
-    if not isinstance(info, dict):
-        raise BencodeError("torrent file has no info dictionary")
+    parsed, (start, end) = _decode_with_info_span(torrent_bytes)
+    info = parsed[b"info"]
 
     name = info.get(b"name", b"")
     if isinstance(name, bytes):
@@ -138,5 +156,5 @@ def torrent_summary(torrent_bytes: bytes) -> dict[str, Any]:
         "name": name,
         "size_bytes": total,
         "file_count": count,
-        "info_hash": hashlib.sha1(encode(info)).hexdigest(),
+        "info_hash": hashlib.sha1(torrent_bytes[start:end]).hexdigest(),
     }

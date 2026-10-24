@@ -12,8 +12,10 @@ pure: give it a string, get a :class:`ParsedRelease`.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import re
 from datetime import date
+from functools import lru_cache
 
 from .models import ParsedRelease, Release
 
@@ -222,7 +224,23 @@ def _title_before(text: str, index: int) -> str:
 
 def parse(name: str, release: Release | None = None) -> ParsedRelease:
     """Parse a release name, optionally refined by indexer-supplied hints."""
-    original = (name or "").strip()
+    # A fresh copy every time: callers own the result, and the cached one must
+    # never see another caller's hints.
+    cached = _parse_name((name or "").strip())
+    parsed = dataclasses.replace(cached, episodes=list(cached.episodes))
+    if release is not None:
+        _apply_hints(parsed, release)
+    return parsed
+
+
+@lru_cache(maxsize=4096)
+def _parse_name(original: str) -> ParsedRelease:
+    """The name-only half of :func:`parse`, memoised.
+
+    One search pass re-reads the same tracker results for every episode it
+    plans, so the same few hundred names come through again and again -- and
+    each costs some sixty regex searches.
+    """
     text = _normalise(original)
     parsed = ParsedRelease(raw_name=original)
 
@@ -304,9 +322,6 @@ def parse(name: str, release: Release | None = None) -> ParsedRelease:
     parsed.is_proper = bool(RE_PROPER.search(text))
     parsed.is_hybrid = bool(RE_HYBRID.search(text))
     parsed.release_group = _release_group(original)
-
-    if release is not None:
-        _apply_hints(parsed, release)
     return parsed
 
 

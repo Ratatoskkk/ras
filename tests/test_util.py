@@ -52,6 +52,17 @@ class TestBencode:
         assert summary["size_bytes"] == 350
         assert summary["file_count"] == 2
 
+    def test_info_hash_uses_the_original_bytes_of_an_unsorted_info_dict(self) -> None:
+        # Keys out of canonical order: re-encoding would sort them and hash
+        # something qBittorrent never sees.
+        info = b"d6:lengthi5e4:name1:x12:piece lengthi16e6:pieces0:e"
+        unsorted = b"d4:name1:x6:lengthi5e12:piece lengthi16e6:pieces0:e"
+        assert bencode.info_hash(b"d4:info" + unsorted + b"e") == hashlib.sha1(unsorted).hexdigest()
+        assert bencode.info_hash(b"d4:info" + info + b"e") == hashlib.sha1(info).hexdigest()
+        summary = bencode.torrent_summary(b"d4:info" + unsorted + b"e")
+        assert summary["info_hash"] == hashlib.sha1(unsorted).hexdigest()
+        assert summary["size_bytes"] == 5
+
     def test_rejects_html_error_pages(self) -> None:
         with pytest.raises(bencode.BencodeError):
             bencode.info_hash(b"<html>rate limited</html>")
@@ -101,6 +112,16 @@ class TestRetry:
         # Generous lower bound: the Windows timer granularity is ~15 ms and can
         # undershoot a requested sleep slightly.
         assert time.monotonic() - started >= 0.15
+
+
+    async def test_gives_up_rather_than_sleeping_out_a_long_retry_after(self) -> None:
+        async def limited():
+            raise RateLimited("slow down", retry_after=3600)
+
+        started = time.monotonic()
+        with pytest.raises(RateLimited):
+            await retry(limited, policy=RetryPolicy(attempts=3, max_delay=1.0))
+        assert time.monotonic() - started < 1.0
 
 
 class TestRateLimiter:
@@ -155,6 +176,25 @@ class TestCircuitBreaker:
         assert breaker.state == "half_open"
         assert await breaker.call(lambda: asyncio.sleep(0, result="ok")) == "ok"
         assert breaker.state == "closed"
+
+
+    async def test_a_failed_half_open_probe_reopens_it(self) -> None:
+        breaker = CircuitBreaker("test", threshold=1, recovery_seconds=60)
+
+        async def boom():
+            raise TransientError("down")
+
+        with pytest.raises(TransientError):
+            await breaker.call(boom)
+        # Backdated rather than slept: Windows timers can undershoot a short
+        # sleep, which made this flaky.
+        breaker._opened_at -= 61
+        assert breaker.state == "half_open"
+        with pytest.raises(TransientError):
+            await breaker.call(boom)
+        assert breaker.state == "open"
+        with pytest.raises(CircuitOpen):
+            await breaker.call(boom)
 
 
 class TestText:

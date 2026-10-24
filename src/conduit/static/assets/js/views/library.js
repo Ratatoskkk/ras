@@ -21,10 +21,13 @@ export default {
   badge: () => null,
 
   async render(root) {
+    // Reclaim data needs qBittorrent's seeding state, which is slow when the
+    // client is struggling. The title list does not, so it never waits on it.
+    if (!cleanup) loadCleanup(root);
     if (!rows) {
       setHTML(root, html`${card('Library', emptyState('…', 'Loading…'))}`);
       try {
-        [rows, cleanup] = await Promise.all([api.media(), api.cleanup()]);
+        rows = await api.media();
       } catch (error) {
         setHTML(root, html`${card('Library', emptyState('⚠', error.message))}`);
         return;
@@ -147,6 +150,18 @@ export default {
   invalidate() { rows = null; cleanup = null; },
 };
 
+let cleanupLoading = null;
+
+function loadCleanup(root) {
+  cleanupLoading ??= api.cleanup()
+    .then((result) => { cleanup = result; })
+    .catch(() => { cleanup = []; })
+    .finally(() => { cleanupLoading = null; });
+  // Repaint whichever library page is showing when it lands; a page that was
+  // left in the meantime is detached and simply ignored.
+  cleanupLoading.then(() => { if (rows && root.isConnected) paint(root); });
+}
+
 function paint(root) {
   const reclaimable = (cleanup || []).reduce((sum, r) => sum + Number(r.size_bytes || 0), 0);
   setHTML(root, html`
@@ -158,7 +173,7 @@ function paint(root) {
         Ignored <span class="faint">${(rows || []).filter((r) => r.ignored).length}</span>
       </button>
       <button class="chip" data-action="tab" data-value="cleanup" aria-pressed="${tab === 'cleanup'}">
-        Reclaim space <span class="faint">${bytes(reclaimable)}</span>
+        Reclaim space <span class="faint">${cleanup ? bytes(reclaimable) : '…'}</span>
       </button>
       <div class="grow"></div>
       <input type="search" placeholder="Search titles…" aria-label="Search library titles" data-action="search" value="${query}"
@@ -180,8 +195,7 @@ function mediaPanel() {
 
   if (!items.length) {
     return card(wantIgnored ? 'Ignored titles' : 'Followed titles',
-      emptyState('▤', wantIgnored ? 'Nothing ignored' : 'Nothing followed yet',
-        'Add to your Plex watchlist, or start watching a series — rás picks it up automatically.'));
+      emptyState('▤', wantIgnored ? 'Nothing ignored' : 'Nothing followed yet'));
   }
 
   return card(`${items.length} title${items.length === 1 ? '' : 's'}`, html`
@@ -235,7 +249,8 @@ function mediaPanel() {
 }
 
 function cleanupPanel() {
-  const all = (cleanup || []).filter(
+  if (!cleanup) return card('Reclaim space', emptyState('…', 'Loading…'));
+  const all = cleanup.filter(
     (r) => !query || r.display_title.toLowerCase().includes(query)
   );
   const ready = all.filter((r) => r.seed_satisfied);
@@ -247,8 +262,7 @@ function cleanupPanel() {
     ${card(`Ready to reclaim — ${bytes(readyBytes)}`,
       ready.length
         ? html`<div class="list">${ready.map((row) => reclaimRow(row, true))}</div>`
-        : emptyState('✓', 'Nothing ready yet',
-            'Watched downloads appear here once they have met the seeding requirement.'),
+        : emptyState('✓', 'Nothing ready yet'),
       html`<button class="btn btn--sm" data-action="rescan">Rescan watched state</button>`)}
 
     ${seeding.length

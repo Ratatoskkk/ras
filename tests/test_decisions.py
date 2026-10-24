@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from conduit.domain import decisions
 from conduit.domain.parser import parse
@@ -364,6 +364,14 @@ class TestTiming:
 
     def test_lead_time_starts_the_search_early(self) -> None:
         assert decisions.should_search(date.today(), lead_hours=48)
+
+    def test_a_lead_under_a_day_still_counts(self) -> None:
+        evening = datetime(2026, 3, 9, 18, 0)
+        morning = datetime(2026, 3, 9, 6, 0)
+        # Twelve hours before a midnight premiere is the previous evening.
+        assert decisions.search_cutoff(12, now=evening) == date(2026, 3, 10)
+        assert decisions.search_cutoff(12, now=morning) == date(2026, 3, 9)
+        assert decisions.search_cutoff(0, now=evening) == date(2026, 3, 9)
 
 
 def test_display_titles_read_naturally() -> None:

@@ -256,13 +256,12 @@ function agendaView() {
               <span class="sectionhead__note">${upcoming.length} tracked</span></div>
             ${dayGroups(upcoming, 'asc')}
           </div>`
-        : card('Coming up', emptyState('◷', 'Nothing scheduled',
-            'Add to your Plex watchlist, or start watching a series — rás follows it automatically.'))}
+        : card('Coming up', emptyState('◷', 'Nothing scheduled'))}
 
       ${showBacklog && backlog.length
         ? html`<div class="stack">
             <div class="sectionhead"><h2>Already aired, still missing</h2>
-              <span class="sectionhead__note">${backlog.length} — searched on every pass, newest first</span></div>
+              <span class="sectionhead__note">${backlog.length}</span></div>
             ${dayGroups(backlog.slice(0, 200), 'desc')}
           </div>`
         : ''}

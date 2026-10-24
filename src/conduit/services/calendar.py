@@ -137,25 +137,18 @@ async def _refresh_show(
         backlog_grace_days=config.calendar.fresh_window_days,
     )
 
-    created = 0
-    for want in wants:
-        air_iso = want.air_date.isoformat() if want.air_date else None
-        state = (
+    cutoff = decisions.search_cutoff(config.calendar.pre_air_lead_hours)
+    await ctx.repos.wanted.upsert_many([
+        (
+            media_id, want.season, want.episode, want.title,
+            want.air_date.isoformat() if want.air_date else None,
             WantedState.SEARCHING
-            if decisions.should_search(
-                want.air_date, lead_hours=config.calendar.pre_air_lead_hours
-            )
-            else WantedState.WAITING
+            if want.air_date is None or want.air_date <= cutoff
+            else WantedState.WAITING,
         )
-        await ctx.repos.wanted.upsert(
-            media_id=media_id,
-            season=want.season,
-            episode=want.episode,
-            title=want.title,
-            air_date=air_iso,
-            state=state,
-        )
-        created += 1
+        for want in wants
+    ])
+    created = len(wants)
 
     # Anything we already have on disk is no longer wanted.
     await ctx.repos.wanted.mark_present(media_id, have | watched)
@@ -179,8 +172,8 @@ async def _refresh_show(
 
 async def _promote_and_expire(ctx: Conduit, summary: dict[str, int]) -> dict[str, int]:
     config = ctx.config
-    today = date.today().isoformat()
-    promoted = await ctx.repos.wanted.promote_due(today)
+    cutoff = decisions.search_cutoff(config.calendar.pre_air_lead_hours).isoformat()
+    promoted = await ctx.repos.wanted.promote_due(cutoff)
     slowed = await ctx.repos.wanted.expire_stale(
         config.calendar.give_up_days_tv,
         config.calendar.give_up_days_movie,

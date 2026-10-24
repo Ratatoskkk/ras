@@ -135,18 +135,23 @@ def rank(
     profile: QualityProfile,
     *,
     episode_counts: dict[tuple[str, str], int] | None = None,
+    parsed: dict[tuple[str, str], ParsedRelease] | None = None,
 ) -> list[ScoredRelease]:
     """Score everything and return it best-first, rejects included.
 
     Rejects are kept so the UI can explain the decision; callers filter with
-    :func:`best`. ``episode_counts`` is keyed by ``Release.key`` -- torrent ids
-    are only unique within one tracker.
+    :func:`best`. ``episode_counts`` and ``parsed`` are keyed by
+    ``Release.key`` -- torrent ids are only unique within one tracker. Pass
+    ``parsed`` when the caller already parsed the names, so they are not
+    parsed a second time.
     """
     episode_counts = episode_counts or {}
+    parsed = parsed or {}
     scored = [
         evaluate(
             release,
             profile,
+            parsed=parsed.get(release.key),
             episode_count=episode_counts.get(release.key, 1),
         )
         for release in releases

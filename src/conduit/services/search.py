@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from datetime import date
 from typing import Any
 
 from ..clients.indexers.base import SearchQuery
@@ -44,11 +43,12 @@ async def run_search(
         log.warning("no indexers configured; skipping search")
         return {"searched": 0, "grabbed": 0}
 
-    await ctx.repos.wanted.promote_due(date.today().isoformat())
+    lead_hours = ctx.config.calendar.pre_air_lead_hours
+    await ctx.repos.wanted.promote_due(decisions.search_cutoff(lead_hours).isoformat())
     fresh_days = ctx.config.calendar.fresh_window_days if fresh_only else None
     wants = await ctx.repos.wanted.due_for_search(
         limit=limit, fresh_days=fresh_days,
-        lead_hours=ctx.config.calendar.pre_air_lead_hours,
+        lead_hours=lead_hours,
     )
     if not wants:
         return {"searched": 0, "grabbed": 0}
@@ -189,6 +189,7 @@ async def preview_media(ctx: Conduit, media_id: int, season: int | None = None) 
             )
             for release in releases
         },
+        parsed=parsed,
     )
     for item in scored:
         if not decisions.matches_target(
@@ -382,6 +383,7 @@ async def _search_target(
             )
             for r in candidates
         },
+        parsed=parsed_map,
     )
     winner = scoring.best(scored, profile)
     if winner is None:

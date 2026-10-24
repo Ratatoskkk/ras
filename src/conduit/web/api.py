@@ -107,9 +107,11 @@ async def get_events(
     since_id: int = 0,
     category: str | None = None,
     media_id: int | None = None,
+    hide_debug: bool = False,
 ) -> list[dict[str, Any]]:
     return await ctx_of(request).repos.events.recent(
-        limit=limit, since_id=since_id, category=category, media_id=media_id
+        limit=limit, since_id=since_id, category=category, media_id=media_id,
+        hide_debug=hide_debug,
     )
 
 
@@ -178,17 +180,25 @@ async def approve_downloads(request: Request, payload: IdList) -> dict[str, Any]
 @router.post("/downloads/deny")
 async def deny_downloads(request: Request, payload: IdList) -> dict[str, Any]:
     ctx = ctx_of(request)
-    rows = await ctx.repos.downloads.deny_many(payload.ids)
-    count = len(rows)
-    # Denied releases go on the blocklist so the next search does not re-offer them.
-    for row in rows:
-        if row.get("indexer_id"):
-            await ctx.repos.blocklist.add(
-                row["indexer"], str(row["indexer_id"]),
-                title=row["display_title"], reason="denied from dashboard",
+    async with ctx.download_decision_lock:
+        rows = await ctx.repos.downloads.deny_many(payload.ids)
+        reopened = 0
+        # Denied releases go on the blocklist so the next search does not
+        # re-offer them, and their wants go back to searching. Left GRABBED,
+        # a denied episode was never looked for again.
+        for row in rows:
+            if row.get("indexer_id"):
+                await ctx.repos.blocklist.add(
+                    row["indexer"], str(row["indexer_id"]),
+                    title=row["display_title"], reason="denied from dashboard",
+                )
+            reopened += await ctx.repos.wanted.reopen_for_download(
+                int(row["id"]), int(row["wanted_id"]) if row.get("wanted_id") else None
             )
+    count = len(rows)
     if count:
         await ctx.record("approval", f"Denied {count} download(s)")
+        ctx.bus.publish("calendar.refreshed", changed=reopened)
     return {"ok": True, "denied": count}
 
 
@@ -350,7 +360,14 @@ async def set_wanted_state(
     request: Request, wanted_id: int, value: str = Body(embed=True)
 ) -> dict[str, Any]:
     ctx = ctx_of(request)
-    await ctx.repos.wanted.set_state(wanted_id, value)
+    try:
+        state_value = WantedState(value)
+    except ValueError:
+        allowed = ", ".join(s.value for s in WantedState)
+        raise HTTPException(422, f"Unknown state {value!r}. Use one of: {allowed}") from None
+    if not await ctx.repos.wanted.get(wanted_id):
+        raise HTTPException(404, "Want not found")
+    await ctx.repos.wanted.set_state(wanted_id, state_value)
     return {"ok": True}
 
 

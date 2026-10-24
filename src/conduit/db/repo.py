@@ -194,6 +194,19 @@ class WantedRepo(BaseRepo):
         )
         return int(rows[0]["id"])
 
+    async def upsert_many(
+        self, rows: list[tuple[int, int | None, int | None, str, str | None, str]]
+    ) -> None:
+        """Batch :meth:`upsert`: ``(media_id, season, episode, title, air_date, state)``.
+
+        The calendar writes every missing episode of every show on each pass;
+        one executemany replaces a round trip to the database thread per row.
+        """
+        await self.db.execute_many(
+            self._UPSERT.replace("RETURNING id", ""),
+            [(m, s, e, t, a, str(state)) for m, s, e, t, a, state in rows],
+        )
+
     async def get(self, wanted_id: int) -> Row | None:
         return await self.db.fetch_one("SELECT * FROM wanted WHERE id = ?", (wanted_id,))
 
@@ -318,7 +331,9 @@ class WantedRepo(BaseRepo):
         short-interval poll that catches same-day releases. The limit selects
         titles; all matching wants for those titles must be searched together.
         """
-        cutoff = (date.today() + timedelta(hours=lead_hours)).isoformat()
+        from ..domain.decisions import search_cutoff
+
+        cutoff = search_cutoff(lead_hours).isoformat()
         clause = """(
             w.state = ? OR (
                 w.state = ? AND (w.last_search_at IS NULL
@@ -547,8 +562,8 @@ class WantedRepo(BaseRepo):
                     (search_attempts >= ?
                      AND first_search_at < datetime('now', ?)
                      AND (air_date IS NULL OR air_date < date('now', ?)))
-                    OR (episode IS NOT NULL AND first_search_at < datetime('now', ?))
-                    OR (episode IS NULL AND first_search_at < datetime('now', ?))
+                    OR (season IS NOT NULL AND first_search_at < datetime('now', ?))
+                    OR (season IS NULL AND first_search_at < datetime('now', ?))
                  )""",
             (WantedState.UNAVAILABLE, WantedState.SEARCHING, max_attempts,
              f"-{fresh_days} days", f"-{fresh_days} days",
@@ -792,7 +807,7 @@ class DownloadRepo(BaseRepo):
         return await self.db.fetch_all(
             f"UPDATE downloads SET state = ?, updated_at = datetime('now') "
             f"WHERE id IN ({marks}) AND state = ? AND archived = 0 "
-            f"RETURNING id, indexer, indexer_id, display_title",
+            f"RETURNING id, indexer, indexer_id, display_title, wanted_id",
             [DownloadState.DENIED, *ids, DownloadState.PENDING_APPROVAL],
         )
 
@@ -1053,9 +1068,11 @@ class EventRepo(BaseRepo):
 
     async def recent(
         self, limit: int = 100, category: str | None = None, media_id: int | None = None,
-        since_id: int = 0, download_id: int | None = None,
+        since_id: int = 0, download_id: int | None = None, hide_debug: bool = False,
     ) -> list[Row]:
         clauses, params = ["id > ?"], [since_id]
+        if hide_debug:
+            clauses.append("level != 'debug'")
         if category:
             clauses.append("category = ?")
             params.append(category)

@@ -281,6 +281,20 @@ class TestWanted:
         )
         assert await repos.wanted.expire_stale(45, 180, max_attempts=60) == 0
 
+    async def test_season_level_wants_give_up_on_the_tv_clock(self, repos) -> None:
+        media_id = await seed_show(repos)
+        wanted_id = await repos.wanted.upsert(
+            media_id=media_id, season=2, episode=None, state=WantedState.SEARCHING,
+        )
+        await repos.wanted.record_search_miss(wanted_id, "nothing found")
+        await repos.wanted.db.execute(
+            "UPDATE wanted SET first_search_at=datetime('now','-60 days') WHERE id=?",
+            (wanted_id,),
+        )
+        # 60 days is past the 45-day TV limit but well short of the movie one.
+        assert await repos.wanted.expire_stale(45, 180) == 1
+        assert (await repos.wanted.get(wanted_id))["state"] == WantedState.UNAVAILABLE
+
     async def test_upcoming_puts_future_releases_first(self, repos) -> None:
         media_id = await seed_show(repos)
         await repos.wanted.upsert(media_id=media_id, season=1, episode=1, air_date="1999-01-10")
@@ -465,6 +479,13 @@ class TestCacheAndEvents:
         await repos.events.add("grab", "Found something", data={"score": 1500})
         recent = await repos.events.recent()
         assert recent[0]["data"] == {"score": 1500}
+
+    async def test_the_short_feed_can_leave_out_debug_noise(self, repos) -> None:
+        await repos.events.add("download", "Completed Heat", level="success")
+        await repos.events.add("search", "No release for Heat", level="debug")
+        quiet = await repos.events.recent(hide_debug=True)
+        assert [row["message"] for row in quiet] == ["Completed Heat"]
+        assert len(await repos.events.recent()) == 2
 
     async def test_task_health_is_recorded(self, repos) -> None:
         await repos.tasks.start("search")

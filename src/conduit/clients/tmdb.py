@@ -10,6 +10,7 @@ Two things make this materially cheaper than the reference implementation:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any, Protocol
 
@@ -66,7 +67,10 @@ class TmdbClient:
 
     # -- plumbing -----------------------------------------------------------
     async def _get(
-        self, path: str, params: dict[str, Any] | None = None, ttl: int = TTL_MOVIE
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        ttl: int | Callable[[dict[str, Any]], int] = TTL_MOVIE,
     ) -> dict[str, Any] | None:
         if not self.api_key:
             return None
@@ -78,7 +82,7 @@ class TmdbClient:
                 return cached
         payload = await self.http.get_json(path, params=query, allow_404=True)
         if payload is not None and self.cache is not None:
-            await self.cache.set(cache_key, payload, ttl)
+            await self.cache.set(cache_key, payload, ttl(payload) if callable(ttl) else ttl)
         return payload
 
     # -- movies -------------------------------------------------------------
@@ -119,16 +123,13 @@ class TmdbClient:
 
     # -- tv -----------------------------------------------------------------
     async def show(self, tmdb_id: str | int) -> dict[str, Any] | None:
-        data = await self._get(f"/tv/{tmdb_id}", ttl=TTL_RETURNING)
-        # A finished series will never gain another episode, so re-cache it for
-        # far longer than a returning one.
-        if (
-            data
-            and data.get("status") in ("Ended", "Canceled")
-            and self.cache is not None
-        ):
-            await self.cache.set(f"tmdb:/tv/{tmdb_id}:[]", data, TTL_ENDED)
-        return data
+        # A finished series will never gain another episode, so it is cached
+        # for far longer than a returning one. Decided when the answer is
+        # stored, rather than by re-writing the entry on every cache hit.
+        return await self._get(
+            f"/tv/{tmdb_id}",
+            ttl=lambda data: TTL_ENDED if _has_ended(data) else TTL_RETURNING,
+        )
 
     async def show_with_seasons(
         self, tmdb_id: str | int, season_numbers: list[int] | None = None
@@ -152,11 +153,14 @@ class TmdbClient:
             return base
 
         merged = dict(base)
+        # Episode lists are the bulk of the payload, and an ended series'
+        # never change -- no reason to refetch them every six hours.
+        ttl = TTL_ENDED if _has_ended(base) else TTL_SEASON
         for chunk_start in range(0, len(season_numbers), 20):
             chunk = season_numbers[chunk_start : chunk_start + 20]
             append = ",".join(f"season/{n}" for n in chunk)
             payload = await self._get(
-                f"/tv/{tmdb_id}", {"append_to_response": append}, ttl=TTL_SEASON
+                f"/tv/{tmdb_id}", {"append_to_response": append}, ttl=ttl
             )
             if payload:
                 for number in chunk:
@@ -183,6 +187,10 @@ class TmdbClient:
             params["year" if media_type == "movie" else "first_air_date_year"] = year
         payload = await self._get(f"/search/{media_type}", params, ttl=TTL_MOVIE)
         return (payload or {}).get("results") or []
+
+
+def _has_ended(data: dict[str, Any]) -> bool:
+    return data.get("status") in ("Ended", "Canceled")
 
 
 def _parse_date(value: Any) -> date | None:

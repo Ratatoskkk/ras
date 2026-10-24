@@ -7,7 +7,7 @@ outcome; everything in between is here, where it can be tested exhaustively.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from ..config import Policy
 from ..util.text import episode_code, title_similarity
@@ -292,12 +292,22 @@ def _as_date(value: object) -> date | None:
     return None
 
 
+def search_cutoff(lead_hours: int = 0, *, now: datetime | None = None) -> date:
+    """The latest air date that is searchable right now.
+
+    Computed on a datetime, not a date: ``date + timedelta(hours=12)`` keeps
+    only whole days, so any lead under 24 hours silently did nothing.
+    """
+    now = now or datetime.now()
+    return (now + timedelta(hours=max(lead_hours, 0))).date()
+
+
 def should_search(air: date | None, *, today: date | None = None, lead_hours: int = 0) -> bool:
     """Has this aired (allowing an optional head start)?"""
     if air is None:
         return True  # unknown date: worth a look
-    today = today or date.today()
-    return air - timedelta(hours=lead_hours) <= today
+    now = datetime.combine(today, datetime.now().time()) if today else None
+    return air <= search_cutoff(lead_hours, now=now)
 
 
 def is_stale(

@@ -35,6 +35,7 @@ export default {
   async render(root) {
     setHTML(root, shell(html`<div class="empty">Loading…</div>`));
     await reload();
+    if (!root.isConnected) return;
     paint(root);
 
     // New events arrive over the WebSocket; prepend them without a refetch.

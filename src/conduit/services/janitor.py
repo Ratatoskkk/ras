@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from typing import Any
 
@@ -12,6 +13,9 @@ from ..util.text import human_duration, human_size
 from .context import Conduit
 
 log = get_logger("janitor")
+
+# Upper bound on a seeding-state read that a person is waiting for.
+CLIENT_READ_TIMEOUT = 5.0
 
 
 async def sync_watched_flags(ctx: Conduit) -> dict[str, int]:
@@ -110,7 +114,9 @@ async def cleanup_candidates(ctx: Conduit) -> list[dict[str, Any]]:
     client_available = ctx.qbt is not None
     if ctx.qbt is not None:
         try:
-            live = await ctx.qbt.torrents()
+            # Someone is looking at this page. A struggling client otherwise
+            # held it for the full retry ladder -- eleven seconds and counting.
+            live = await asyncio.wait_for(ctx.qbt.torrents(), timeout=CLIENT_READ_TIMEOUT)
         except Exception as exc:
             client_available = False
             log.warning("could not read seeding state", extra={"err": str(exc)})

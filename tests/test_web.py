@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from conduit.config import ConfigStore, Settings
-from conduit.domain.models import DownloadState
+from conduit.domain.models import DownloadState, WantedState
 from conduit.services.bus import QUEUE_LIMIT, EventBus
 from conduit.web.app import create_app
 from conduit.web.security import is_private_address
@@ -49,6 +49,18 @@ class TestEndpoints:
 
     async def test_unknown_api_route_is_404_not_the_spa(self, client) -> None:
         assert (await client.get("/api/nope")).status_code == 404
+
+    async def test_want_state_must_be_a_real_state(self, client) -> None:
+        ctx = client.app.state.conduit
+        media_id = await ctx.repos.media.upsert(media_type="movie", tmdb_id="9", title="Heat")
+        wanted_id = await ctx.repos.wanted.upsert(media_id=media_id, season=None, episode=None)
+        bad = await client.post(f"/api/wanted/{wanted_id}/state", json={"value": "bogus"})
+        assert bad.status_code == 422
+        missing = await client.post("/api/wanted/999/state", json={"value": "ignored"})
+        assert missing.status_code == 404
+        ok = await client.post(f"/api/wanted/{wanted_id}/state", json={"value": "ignored"})
+        assert ok.status_code == 200
+        assert (await ctx.repos.wanted.get(wanted_id))["state"] == WantedState.IGNORED
 
     async def test_missing_download_is_404(self, client) -> None:
         assert (await client.get("/api/downloads/999")).status_code == 404
@@ -150,6 +162,26 @@ class TestApprovalFlow:
         await client.post("/api/downloads/deny", json={"ids": [download_id]})
         entries = (await client.get("/api/blocklist")).json()
         assert entries[0]["indexer_id"] == "42"
+
+    async def test_deny_sends_the_wants_back_to_searching(self, client) -> None:
+        ctx = client.app.state.conduit
+        media_id = await ctx.repos.media.upsert(media_type="show", tmdb_id="1", title="Silo")
+        wanted_id = await ctx.repos.wanted.upsert(
+            media_id=media_id, season=1, episode=1, state=WantedState.SEARCHING
+        )
+        download_id = await ctx.repos.downloads.create(
+            media_id=media_id, wanted_id=wanted_id, display_title="Silo (S01E01)",
+            indexer="Aither", indexer_id="7", season=1, episode_from=1, episode_to=1,
+            wanted_count=1,
+        )
+        await ctx.repos.wanted.set_state(
+            wanted_id, WantedState.GRABBED, reason=f"grabbed #{download_id}"
+        )
+
+        await client.post("/api/downloads/deny", json={"ids": [download_id]})
+
+        assert (await ctx.repos.wanted.get(wanted_id))["state"] == WantedState.SEARCHING
+        assert ("Aither", "7") in await ctx.repos.downloads.known_release_keys()
 
     async def test_stale_deny_does_not_blocklist_an_approved_release(self, client) -> None:
         download_id = await self._pending(client)
@@ -349,3 +381,5 @@ class TestSecurity:
                 assert (await http.get("/api/state")).status_code == 403
                 ok = await http.get("/api/state", headers={"X-Conduit-Token": "s3cret"})
                 assert ok.status_code == 200
+                # Non-ASCII is a wrong token, not a server error.
+                assert (await http.get("/api/state", params={"token": "s3crét"})).status_code == 403

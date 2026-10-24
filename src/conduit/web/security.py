@@ -29,6 +29,14 @@ log = get_logger("security")
 OPEN_PATHS = ("/api/health", "/favicon.ico")
 
 
+def _token_matches(presented: str, expected: str) -> bool:
+    # Bytes, not str: compare_digest raises TypeError on non-ASCII text, which
+    # turned a garbage header into a 500 instead of a 403.
+    return bool(expected) and secrets.compare_digest(
+        presented.encode("utf-8"), expected.encode("utf-8")
+    )
+
+
 def is_private_address(host: str | None) -> bool:
     if not host:
         return False
@@ -66,9 +74,7 @@ class AccessMiddleware(BaseHTTPMiddleware):
 
         client_host = request.client.host if request.client else None
         lan_ok = is_private_address(client_host)
-        token_ok = bool(self.token) and secrets.compare_digest(
-            _presented_token(request), self.token
-        )
+        token_ok = _token_matches(_presented_token(request), self.token)
 
         allowed = {
             "lan": lan_ok,
@@ -93,9 +99,7 @@ def websocket_allowed(settings: Settings, host: str | None, token: str) -> bool:
     if settings.conduit_auth_mode == "none":
         return True
     lan_ok = is_private_address(host)
-    token_ok = bool(settings.conduit_api_token) and secrets.compare_digest(
-        token, settings.conduit_api_token
-    )
+    token_ok = _token_matches(token, settings.conduit_api_token)
     return {
         "lan": lan_ok,
         "token": token_ok,

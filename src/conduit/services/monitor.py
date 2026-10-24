@@ -30,9 +30,10 @@ async def monitor_downloads(ctx: Conduit) -> dict[str, int]:
     if not rows or ctx.qbt is None:
         return {"tracked": 0}
 
-    torrents = await ctx.qbt.torrents()
+    prefix = ctx.config.policy.torrent_tag_prefix
+    torrents = await _tracked_torrents(ctx, rows, prefix)
     by_hash = {t.info_hash: t for t in torrents if t.info_hash}
-    by_tag = _index_by_tag(torrents, ctx.config.policy.torrent_tag_prefix)
+    by_tag = _index_by_tag(torrents, prefix)
 
     progress_batch: list[tuple[float, int, float, str, int]] = []
     live: dict[str, dict[str, Any]] = {}
@@ -41,7 +42,7 @@ async def monitor_downloads(ctx: Conduit) -> dict[str, int]:
 
     for row in rows:
         download_id = int(row["id"])
-        torrent = _locate(row, by_hash, by_tag, ctx.config.policy.torrent_tag_prefix)
+        torrent = _locate(row, by_hash, by_tag, prefix)
 
         if torrent is None:
             lost += 1
@@ -103,6 +104,24 @@ async def monitor_downloads(ctx: Conduit) -> dict[str, int]:
 
     return {"tracked": len(rows), "completed": completed, "lost": lost,
             "abandoned": abandoned}
+
+
+async def _tracked_torrents(
+    ctx: Conduit, rows: list[dict[str, Any]], prefix: str
+) -> list[TorrentStatus]:
+    """Just the torrents these downloads could be, not the whole client.
+
+    This runs every few seconds, and a client seeding thousands of torrents
+    returned every one of them each time. Ask by hash first; only rows the
+    hashes do not account for need the tag lookup (an adopted torrent has a
+    hash but no tag, so it is always found by the first query).
+    """
+    hashes = sorted({(r.get("info_hash") or "").lower() for r in rows} - {""})
+    torrents = await ctx.qbt.torrents(hashes=hashes) if hashes else []
+    found = {t.info_hash for t in torrents}
+    if any((r.get("info_hash") or "").lower() not in found for r in rows):
+        torrents += [t for t in await ctx.qbt.torrents(tag=prefix) if t.info_hash not in found]
+    return torrents
 
 
 def _index_by_tag(torrents: list[TorrentStatus], prefix: str) -> dict[int, TorrentStatus]:
@@ -198,19 +217,25 @@ async def _handle_complete(ctx: Conduit, row: dict[str, Any], torrent: TorrentSt
     log.info("download complete", extra={"title": title,
                                          "size": human_size(torrent.size_bytes)})
 
-    if ctx.config.policy.trigger_plex_refresh and ctx.plex is not None:
-        media = await ctx.repos.media.get(int(media_id)) if media_id else None
-        media_type = media["media_type"] if media else "movie"
-        sections = await ctx.plex.refresh_sections(media_type)
-        if sections:
-            log.debug("asked Plex to rescan", extra={"sections": ", ".join(sections)})
-
     if row.get("is_season_pack") and row.get("season") is not None and media_id:
         from .janitor import _pack_seasons, retire_superseded_episodes
 
         seasons = _pack_seasons(row)
         if seasons:
             await retire_superseded_episodes(ctx, int(media_id), seasons, download_id)
+
+    if ctx.config.policy.trigger_plex_refresh and ctx.plex is not None:
+        # Best effort. The row is already COMPLETED, so a Plex outage raising
+        # here used to abort the rest of this monitor pass as well.
+        try:
+            media = await ctx.repos.media.get(int(media_id)) if media_id else None
+            media_type = media["media_type"] if media else "movie"
+            sections = await ctx.plex.refresh_sections(media_type)
+        except Exception as exc:
+            log.warning("could not ask Plex to rescan", extra={"title": title, "err": str(exc)})
+        else:
+            if sections:
+                log.debug("asked Plex to rescan", extra={"sections": ", ".join(sections)})
 
 
 def _episode_span(row: dict[str, Any]) -> list[int] | None:

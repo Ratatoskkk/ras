@@ -73,7 +73,9 @@ async def retry(
         except RateLimited as exc:
             last = exc
             wait = exc.retry_after if exc.retry_after is not None else policy.delay_for(attempt)
-            if attempt == policy.attempts:
+            # A tracker asking for an hour's pause would otherwise park the
+            # whole search pass here. Give up and let the next cycle retry.
+            if attempt == policy.attempts or wait > policy.max_delay:
                 break
             log.warning(
                 "rate limited, backing off", extra={"call": name, "wait": round(wait, 2)}
@@ -151,8 +153,14 @@ class CircuitBreaker:
 
     def record_failure(self) -> None:
         self._failures += 1
-        if self._failures >= self.threshold and self._opened_at is None:
-            self._opened_at = time.monotonic()
+        if self._failures < self.threshold:
+            return
+        was_closed = self._opened_at is None
+        # Also restarts the clock after a failed half-open probe. Without that
+        # the breaker stayed half-open for good once it had tripped once, and
+        # every call went straight through to the dead service.
+        self._opened_at = time.monotonic()
+        if was_closed:
             log.error(
                 "circuit opened after repeated failures",
                 extra={"service": self.name, "failures": self._failures},
