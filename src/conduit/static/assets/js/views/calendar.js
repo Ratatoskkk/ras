@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import {
-  WANT_STATE_STYLE, card, emptyState, poster, searchOutcome, toast,
+  WANT_STATE_STYLE, card, emptyState, moreMenu, poster, searchOutcome, toast,
 } from '../components.js';
 import { store } from '../store.js';
 import { icon } from '../icons.js';
@@ -50,8 +50,10 @@ export default {
         <button class="chip" data-action="cal-mode" data-value="agenda"
                 aria-pressed="${mode === 'agenda'}">Agenda</button>
         <div class="grow"></div>
-        <button class="btn btn--sm" data-action="refresh-calendar">Refresh from TMDB</button>
-        <button class="btn btn--sm btn--primary" data-action="search-now">Search trackers now</button>
+        <div class="filters__actions">
+          <button class="btn btn--sm" data-action="refresh-calendar">Refresh from TMDB</button>
+          <button class="btn btn--sm btn--primary" data-action="search-now">Search trackers now</button>
+        </div>
       </div>
       ${mode === 'month' ? monthView() : agendaView()}
     `);
@@ -85,8 +87,18 @@ export default {
     }
     if (action === 'cal-day') {
       // Clicking the open day closes it, so the grid is never stuck expanded.
-      selectedDay = selectedDay === target.dataset.day ? null : target.dataset.day;
+      const day = target.dataset.day;
+      selectedDay = selectedDay === day ? null : day;
       this.render(root);
+      root.querySelector(`[data-day="${day}"]`)?.focus({ preventScroll: true });
+      // The detail opens under the grid; bring it into view so the click
+      // visibly does something.
+      if (selectedDay) {
+        root.querySelector('.cal__detail')?.scrollIntoView({
+          behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+          block: 'nearest',
+        });
+      }
       return true;
     }
     if (action === 'toggle-backlog') {
@@ -208,7 +220,8 @@ function dayCell(date, index, byDay, todayIso) {
     <button class="${classes.join(' ')}" style="--i:${index}"
             data-action="cal-day" data-day="${iso}"
             aria-pressed="${selectedDay === iso}"
-            aria-label="${items.length} release${items.length === 1 ? '' : 's'} on ${iso}">
+            aria-label="${items.length} release${items.length === 1 ? '' : 's'} on ${
+              date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}">
       <span class="daycell__num">${date.getDate()}</span>
       <span class="daycell__count">${items.length}</span>
       <span class="daycell__posters">
@@ -230,7 +243,7 @@ function dayDetail(items) {
     <div class="cal__detail">
       <div class="daygroup__label">${dayLabel(selectedDay)} · ${items.length} release${
         items.length === 1 ? '' : 's'}</div>
-      ${items.map(airingRow)}
+      <div class="card list">${items.map(airingRow)}</div>
     </div>`;
 }
 
@@ -284,7 +297,7 @@ function dayGroups(items, direction) {
           ${byDay.get(day).length} item${byDay.get(day).length === 1 ? '' : 's'}
         </span>
       </div>
-      ${byDay.get(day).map(airingRow)}
+      <div class="card list">${byDay.get(day).map(airingRow)}</div>
     </div>`)}`;
 }
 
@@ -292,15 +305,17 @@ function airingRow(item) {
   const timer = countdown(item.air_date);
   const code = episodeCode(item.season, item.episode);
   const style = WANT_STATE_STYLE[item.state] || { label: item.state, cls: '' };
+  // A film's "episode title" is its own title; saying it twice adds nothing.
+  const subtitle = item.episode_title && item.episode_title !== item.title ? item.episode_title : '';
   return html`
-    <div class="airing ${timer.past ? '' : 'airing--soon'}">
+    <div class="airing">
       ${poster(item.poster_path, item.title)}
       <div class="grow">
         <div class="trunc"><strong>${item.title}</strong>
           ${code ? html` <span class="faint mono">${code}</span>` : ''}</div>
         <div class="item__meta">
           <span class="pill ${style.cls}">${style.label}</span>
-          ${item.episode_title ? html`<span class="faint trunc">${item.episode_title}</span>` : ''}
+          ${subtitle ? html`<span class="faint trunc">${subtitle}</span>` : ''}
           ${item.search_attempts > 0
             ? html`<span class="faint">· ${item.search_attempts} search${item.search_attempts === 1 ? '' : 'es'}${
                      item.last_search_at ? `, last ${relativeTime(item.last_search_at)}` : ''}</span>`
@@ -313,19 +328,23 @@ function airingRow(item) {
       <div class="item__side">
         <span class="countdown ${timer.past ? 'countdown--past' : ''}">${timer.text}</span>
         <div class="item__actions">
+          <button class="btn btn--sm" data-action="search-media" data-id="${item.media_id}"
+                  title="Search trackers for this title now">Search</button>
           <button class="btn btn--sm btn--ghost" data-action="mark-seen" data-id="${item.id}"
                   title="I have already watched this — stop looking for it, but keep following the show">
             Seen
           </button>
-          <button class="btn btn--sm btn--ghost" data-action="seen-through" data-id="${item.media_id}"
-                  data-season="${item.season ?? ''}" data-episode="${item.episode ?? ''}"
-                  title="Mark this and every earlier episode of the season as watched">
-            Seen through
-          </button>
-          <button class="btn btn--sm btn--ghost" data-action="search-media" data-id="${item.media_id}"
-                  title="Search trackers for this title now">Search</button>
-          <button class="btn btn--sm btn--ghost" data-action="ignore-media" data-id="${item.media_id}"
-                  title="Stop following this title">Ignore</button>
+          ${moreMenu(item.title, [
+            item.season
+              ? html`<button class="btn btn--sm btn--ghost" data-action="seen-through" data-id="${item.media_id}"
+                             data-season="${item.season}" data-episode="${item.episode ?? ''}">
+                       Seen through ${code}
+                     </button>`
+              : '',
+            html`<button class="btn btn--sm btn--ghost" data-action="ignore-media" data-id="${item.media_id}">
+                   Stop following
+                 </button>`,
+          ])}
         </div>
       </div>
     </div>`;

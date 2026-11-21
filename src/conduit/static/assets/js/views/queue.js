@@ -27,14 +27,15 @@ export default {
     const items = visible();
     setHTML(root, html`
       <div class="filters">
-        ${FILTERS.map(([value, label]) => html`
-          <button class="chip" data-action="filter" data-value="${value}"
-                  aria-pressed="${filter === value}">
-            ${label}${countFor(value) !== null ? html` <span class="faint">${countFor(value)}</span>` : ''}
-          </button>`)}
+        ${FILTERS.filter(([value]) => value === filter || countFor(value) !== null)
+          .map(([value, label]) => html`
+            <button class="chip" data-action="filter" data-value="${value}"
+                    aria-pressed="${filter === value}">
+              ${label} <span class="faint">${countFor(value) ?? 0}</span>
+            </button>`)}
         <div class="grow"></div>
-        <input type="search" placeholder="Filter by title…" aria-label="Filter downloads by title" data-action="search"
-               value="${query}" style="max-width:240px">
+        <input class="filters__search" type="search" placeholder="Filter by title…"
+               aria-label="Filter downloads by title" data-action="search" value="${query}">
       </div>
 
       ${card(`${items.length} download${items.length === 1 ? '' : 's'}`,
@@ -62,9 +63,11 @@ export default {
       return true;
     }
     if (action === 'clear-history') {
-      await api.action('clear-history');
+      if (!confirm('Clear every failed, denied and cancelled entry from history?\n\n'
+                   + 'Completed downloads stay.')) return true;
+      const result = await api.action('clear-history');
       history = null;
-      toast('Cleared failed and denied entries');
+      toast(`Cleared ${result.removed ?? 0} entr${result.removed === 1 ? 'y' : 'ies'}`);
       store.refresh();
       return true;
     }
@@ -125,5 +128,8 @@ async function loadHistory(root) {
           </tbody>
         </table>`
       : emptyState('·', 'No history yet'));
-  } catch { /* leave the loading state in place */ }
+  } catch (error) {
+    const host = root.querySelector('#history-host');
+    if (host) setHTML(host, emptyState('', 'History could not load', error.message));
+  }
 }

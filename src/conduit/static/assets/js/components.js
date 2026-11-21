@@ -106,9 +106,7 @@ export function downloadRow(item, live, { showActions = true } = {}) {
         </div>
         ${item.release_name ? html`<div class="item__release trunc">${item.release_name}</div>` : ''}
         ${item.error ? html`<div class="item__release" style="color:var(--err)">${item.error}</div>` : ''}
-        ${(isActive || item.state === 'completed')
-          ? progressBar(fraction, variant)
-          : ''}
+        ${isActive ? progressBar(fraction, variant) : ''}
       </div>
       <div class="item__side">
         ${isActive
@@ -188,17 +186,42 @@ export function toast(message, kind = '') {
   }, kind === 'err' ? 6000 : 3500);
 }
 
+let modalReturnFocus = null;
+
 export function openModal(title, bodyHtml) {
   const modal = document.getElementById('modal');
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML =
     typeof bodyHtml === 'string' ? bodyHtml : bodyHtml.value;
-  modal.hidden = false;
+  if (modal.hidden) {
+    modalReturnFocus = document.activeElement;
+    modal.hidden = false;
+    modal.querySelector?.('.modal__head [data-close]')?.focus();
+  }
   return modal;
 }
 
 export function closeModal() {
-  document.getElementById('modal').hidden = true;
+  const modal = document.getElementById('modal');
+  if (modal.hidden) return;
+  modal.hidden = true;
+  if (modalReturnFocus?.isConnected) modalReturnFocus.focus();
+  modalReturnFocus = null;
+}
+
+/**
+ * Secondary row actions behind a labeled "More" button. The menu is a
+ * popover, so it opens in the top layer and closes on Escape or an outside
+ * click; app.js positions it next to its button.
+ */
+let menuSeq = 0;
+export function moreMenu(label, items) {
+  const entries = items.filter(Boolean);
+  if (!entries.length) return '';
+  const id = `menu-${++menuSeq}`;
+  return html`
+    <button class="btn btn--sm btn--ghost" popovertarget="${id}" aria-label="More actions for ${label}">More</button>
+    <div class="menu" id="${id}" popover>${entries}</div>`;
 }
 
 export { esc };

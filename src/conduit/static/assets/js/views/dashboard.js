@@ -307,8 +307,8 @@ function approvalCard(group) {
         <div class="grow">
           <div class="item__title trunc" title="${group.title}">${group.title}</div>
           <div class="item__meta">
-            <span class="pill pill--warn">${group.count} item${group.count === 1 ? '' : 's'}</span>
-            <span class="faint">${group.total_size} total</span>
+            ${group.count > 1 ? html`<span class="pill pill--warn">${group.count} releases</span>` : ''}
+            <span class="faint">${group.total_size}</span>
           </div>
           ${group.items.length === 1
             ? html`<div class="approval__release trunc" title="${group.items[0].release_name}">${group.items[0].release_name}</div>`
@@ -400,9 +400,9 @@ function accountBlock(a) {
         <div class="row"><span class="muted grow">Ratio</span>
           <span class="mono" style="color:var(--ok)">${a.ratio ?? '—'}</span></div>
         <div class="row"><span class="muted grow">Buffer</span>
-          <span class="mono">${a.buffer ?? '—'}</span></div>
+          <span class="mono">${trackerBytes(a.buffer)}</span></div>
         <div class="row"><span class="muted grow">Up / down</span>
-          <span class="mono">${a.uploaded ?? '—'} / ${a.downloaded ?? '—'}</span></div>
+          <span class="mono">${trackerBytes(a.uploaded)} / ${trackerBytes(a.downloaded)}</span></div>
         <div class="row"><span class="muted grow">Seeding</span>
           <span class="mono">${a.seeding ?? 0} · ${a.leeching ?? 0} leeching</span></div>
         ${Number(a.hit_and_runs) > 0
@@ -410,6 +410,14 @@ function accountBlock(a) {
                    <span class="mono" style="color:var(--warn)">${a.hit_and_runs}</span></div>`
           : ''}
       </div>`;
+}
+
+/** UNIT3D reports raw byte counts; some installs send preformatted text. */
+function trackerBytes(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return n < 0 ? `−${bytes(-n)}` : bytes(n);
 }
 
 async function loadActivity(root) {
@@ -426,8 +434,10 @@ async function loadActivity(root) {
             </span>
           </div>`)}`
       : emptyState('·', 'No activity yet');
-  } catch {
-    return; // keep whatever the card is showing
+  } catch (error) {
+    // Keep a feed that already loaded; replace only the loading state.
+    if (activityCache) return;
+    activityCache = emptyState('', 'Activity could not load', error.message);
   }
   const host = root.querySelector('#dash-activity');
   if (host) setHTML(host, activityCache);

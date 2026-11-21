@@ -1,8 +1,7 @@
 import { api } from '../api.js';
 import {
-  card, closeModal, emptyState, openModal, poster, progressBar, searchOutcome, toast,
+  card, closeModal, emptyState, moreMenu, openModal, poster, progressBar, searchOutcome, toast,
 } from '../components.js';
-import { icon } from '../icons.js';
 import { store } from '../store.js';
 import { bytes, html, relativeTime, setHTML, titleCase } from '../util.js';
 
@@ -93,7 +92,7 @@ export default {
         store.refresh();
         return true;
       case 'unfollow':
-        if (!confirm('Remove this title and everything rás tracks for it?')) return true;
+        if (!confirm(`Remove "${target.dataset.title}" and everything rás tracks for it?`)) return true;
         await api.deleteMedia(id);
         rows = await api.media();
         paint(root);
@@ -124,6 +123,11 @@ export default {
         toast('Rescanning Plex for watched state…');
         return true;
       case 'clear-ignored': {
+        const count = (rows || []).filter((r) => r.ignored).length;
+        if (!confirm(
+          `Follow all ${count} ignored title${count === 1 ? '' : 's'} again?\n\n`
+          + 'Their missing episodes come back into play and may be searched and downloaded.'
+        )) return true;
         const result = await api.action('clear-ignored');
         rows = await api.media();
         paint(root);
@@ -176,12 +180,11 @@ function paint(root) {
         Reclaim space <span class="faint">${cleanup ? bytes(reclaimable) : '…'}</span>
       </button>
       <div class="grow"></div>
-      <input type="search" placeholder="Search titles…" aria-label="Search library titles" data-action="search" value="${query}"
-             style="max-width:240px">
-      <button class="btn btn--sm btn--ghost" data-action="clear-ignored"
-              title="Un-ignore every title and bring its episodes back into play">
-        Clear ignore list
-      </button>
+      <input class="filters__search" type="search" placeholder="Search titles…"
+             aria-label="Search library titles" data-action="search" value="${query}">
+      ${tab === 'ignored' && (rows || []).some((r) => r.ignored)
+        ? html`<button class="btn btn--sm" data-action="clear-ignored">Follow all again</button>`
+        : ''}
     </div>
     ${tab === 'cleanup' ? cleanupPanel() : mediaPanel()}
   `);
@@ -229,19 +232,21 @@ function mediaPanel() {
                       data-title="${row.title}" title="Show what the trackers have, and how it scores">
                 Releases
               </button>
-              <button class="btn btn--sm btn--ghost" data-action="seen-all" data-id="${row.id}"
-                      data-title="${row.title}"
-                      title="Mark everything outstanding for this title as already watched">
-                Seen all
-              </button>
-              <button class="btn btn--sm btn--ghost" data-action="refresh-media" data-id="${row.id}"
-                      aria-label="Refresh ${row.title}" title="Refresh ${row.title} from TMDB">${icon('refresh')}</button>
-              <button class="btn btn--sm btn--ghost" data-action="toggle-monitor" data-id="${row.id}"
-                      data-ignored="${Boolean(row.ignored)}">
-                ${row.ignored ? 'Follow' : 'Ignore'}
-              </button>
-              <button class="btn btn--sm btn--danger" data-action="unfollow" data-id="${row.id}"
-                      aria-label="Unfollow ${row.title}" title="Unfollow ${row.title}">${icon('close')}</button>
+              ${moreMenu(row.title, [
+                row.wanted_outstanding
+                  ? html`<button class="btn btn--sm btn--ghost" data-action="seen-all" data-id="${row.id}"
+                                 data-title="${row.title}">Mark all seen</button>`
+                  : '',
+                html`<button class="btn btn--sm btn--ghost" data-action="refresh-media" data-id="${row.id}">
+                       Refresh from TMDB
+                     </button>`,
+                html`<button class="btn btn--sm btn--ghost" data-action="toggle-monitor" data-id="${row.id}"
+                             data-ignored="${Boolean(row.ignored)}">
+                       ${row.ignored ? 'Follow again' : 'Ignore'}
+                     </button>`,
+                html`<button class="btn btn--sm btn--ghost menu__danger" data-action="unfollow"
+                             data-id="${row.id}" data-title="${row.title}">Remove from rás</button>`,
+              ])}
             </div>
           </div>
         </div>`)}

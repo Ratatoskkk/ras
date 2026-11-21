@@ -103,15 +103,15 @@ function shell(body) {
       <button class="chip" data-action="pane" data-value="logs" aria-pressed="${pane === 'logs'}">
         Logs
       </button>
+      <span class="filters__sep" aria-hidden="true"></span>
       ${pane === 'logs'
-        ? html`<span class="faint" style="margin-left:8px">Level</span>
-               ${LEVELS.map((value) => html`
+        ? html`${LEVELS.map((value) => html`
                  <button class="chip" data-action="level" data-value="${value}"
-                         aria-pressed="${level === value}">${value}</button>`)}`
+                         aria-pressed="${level === value}">${titleCase(value.toLowerCase())}</button>`)}`
         : html`${['grab', 'queue', 'download', 'search', 'watchlist', 'cleanup', 'task']
                   .map((value) => html`
                     <button class="chip" data-action="category" data-value="${value}"
-                            aria-pressed="${category === value}">${value}</button>`)}`}
+                            aria-pressed="${category === value}">${titleCase(value)}</button>`)}`}
       <div class="grow"></div>
       <button class="btn btn--sm btn--ghost" data-action="reload">Refresh</button>
     </div>

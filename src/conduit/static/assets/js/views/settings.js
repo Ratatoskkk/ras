@@ -110,6 +110,7 @@ export default {
       return true;
     }
     if (action === 'reload') {
+      if (dirty && !confirm('Discard your unsaved changes?')) return true;
       config = null;
       dirty = false;
       await this.render(root);
@@ -182,7 +183,7 @@ export default {
     node[segments.at(-1)] = value;
 
     const banner = document.querySelector('#save-hint');
-    if (banner) banner.textContent = 'Unsaved changes';
+    if (banner) banner.hidden = false;
     return true;
   },
 
@@ -192,13 +193,7 @@ export default {
 function paint(root) {
   setHTML(root, html`
     <div class="settings-savebar">
-      <div class="settings-savebar__location">
-        <span class="muted">Behaviour lives in </span>
-        <span class="mono settings-savebar__path">${paths?.config_file || 'conduit.toml'}</span>
-        <span class="faint" id="save-hint" style="margin-left:10px">
-          ${dirty ? 'Unsaved changes' : ''}
-        </span>
-      </div>
+      <span class="pill pill--warn" id="save-hint" ${dirty ? '' : 'hidden'}>Unsaved changes</span>
       <div class="settings-savebar__actions">
         <button class="btn btn--ghost btn--sm" data-action="reload">Discard</button>
         <button class="btn btn--primary" data-action="save">Save settings</button>
@@ -298,6 +293,8 @@ function paint(root) {
           Credentials and paths come from <span class="mono">.env</span> and are deliberately not
           editable here.
         </p>
+        <div class="row"><span class="muted grow">Settings file</span>
+          <span class="mono trunc">${paths?.config_file || 'conduit.toml'}</span></div>
         <div class="row"><span class="muted grow">Database</span>
           <span class="mono trunc">${paths?.database}</span></div>
         <div class="row"><span class="muted grow">Download roots</span>

@@ -45,6 +45,9 @@ function freshViewRoot() {
 async function renderRoute() {
   const view = BY_ID[routeId()];
   if (current && current !== view) current.destroy?.();
+  // A new page starts at its top, not wherever the last one was scrolled to.
+  // A calendar day link scrolls itself to the day once it has painted.
+  if (current !== view) window.scrollTo(0, 0);
   current = view;
 
   $('#page-title').textContent = view.title;
@@ -149,15 +152,44 @@ document.addEventListener('click', async (event) => {
   const action = target.dataset.action;
   if (!action || target.tagName === 'INPUT' || target.tagName === 'SELECT') return;
   event.preventDefault();
+  target.closest('[popover]')?.hidePopover();
 
+  // A button stays disabled while its request is in flight, so a second
+  // click cannot approve, deny or delete the same thing twice.
+  // A view that relabels its button ("Searching…") keeps it disabled until the
+  // refresh repaints the row.
+  const button = target.tagName === 'BUTTON' && !target.disabled ? target : null;
+  const label = button?.innerHTML;
+  if (button) button.disabled = true;
   try {
     if (await current?.onAction?.(action, target, viewRoot)) return;
     if (GLOBAL_ACTIONS[action]) await GLOBAL_ACTIONS[action](target);
   } catch (error) {
     toast(error.message || 'Something went wrong', 'err');
-    if (target.disabled) target.disabled = false;
+    if (button) button.innerHTML = label;
+  } finally {
+    if (button?.isConnected && button.innerHTML === label) button.disabled = false;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Row menus: popovers sit in the top layer, so a card's overflow cannot clip
+// them; this pins each one under (or above) the button that opened it.
+// ---------------------------------------------------------------------------
+document.addEventListener('toggle', (event) => {
+  const menu = event.target;
+  if (!(menu instanceof HTMLElement) || !menu.matches('.menu') || event.newState !== 'open') return;
+  const opener = document.querySelector(`[popovertarget="${menu.id}"]`);
+  if (!opener) return;
+  const box = opener.getBoundingClientRect();
+  const below = box.bottom + 4 + menu.offsetHeight <= window.innerHeight;
+  menu.style.top = `${below ? box.bottom + 4 : box.top - 4 - menu.offsetHeight}px`;
+  menu.style.left = `${Math.max(8, box.right - menu.offsetWidth)}px`;
+  menu.querySelector('button')?.focus();
+}, true);
+window.addEventListener('scroll', () => {
+  document.querySelector('.menu:popover-open')?.hidePopover();
+}, { passive: true });
 
 const onFieldEvent = (event) => {
   const target = event.target.closest('[data-action]');
@@ -168,7 +200,25 @@ document.addEventListener('input', onFieldEvent);
 document.addEventListener('change', onFieldEvent);
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') closeModal();
+  const modal = $('#modal');
+  if (modal.hidden) return;
+  if (event.key === 'Escape') {
+    closeModal();
+    return;
+  }
+  // Keep Tab inside the open dialog.
+  if (event.key !== 'Tab') return;
+  const focusable = [...modal.querySelectorAll('button:not([disabled]), a[href], input, select, textarea')];
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -176,7 +226,10 @@ document.addEventListener('keydown', (event) => {
 // ---------------------------------------------------------------------------
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  localStorage.setItem(THEME_KEY, theme);
+  try { localStorage.setItem(THEME_KEY, theme); } catch { /* private window */ }
+  const label = `Theme: ${theme}`;
+  $('#theme-toggle').setAttribute('aria-label', label);
+  $('#theme-toggle').title = label;
 }
 
 $('#theme-toggle').addEventListener('click', () => {
