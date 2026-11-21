@@ -220,7 +220,7 @@ def _to_status(item: dict[str, Any]) -> TorrentStatus:
         name=item.get("name", ""),
         state=item.get("state", ""),
         progress=float(item.get("progress") or 0.0),
-        eta_seconds=eta if 0 < eta < 8640000 else -1,
+        eta_seconds=eta if 0 <= eta < 8640000 else -1,
         dlspeed=float(item.get("dlspeed") or 0.0),
         size_bytes=float(item.get("size") or item.get("total_size") or 0.0),
         save_path=item.get("save_path", ""),

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ipaddress
 import secrets
+from urllib.parse import urlsplit
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -44,6 +45,9 @@ def is_private_address(host: str | None) -> bool:
         address = ipaddress.ip_address(host)
     except ValueError:
         return host in ("localhost", "testclient")
+    # "::ffff:8.8.8.8" counts as private before Python 3.13; judge the IPv4.
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
     return (
         address.is_private
         or address.is_loopback
@@ -62,6 +66,36 @@ def _presented_token(request: Request) -> str:
     return request.query_params.get("token", "").strip()
 
 
+_LOCAL_SUFFIXES = (".local", ".lan", ".home", ".internal", ".home.arpa", ".localhost")
+
+
+def _hostname(value: str) -> str:
+    return (urlsplit(f"//{value}").hostname or "").lower()
+
+
+def host_allowed(headers) -> bool:
+    """Defeat DNS rebinding and cross-site requests.
+
+    A hostile page can make a LAN browser talk to this server from a
+    private address, so the client IP alone proves nothing. The ``Host`` it
+    used must be an address or a local name, and a browser ``Origin`` must
+    be this very host.
+    """
+    host_header = headers.get("host", "")
+    host = _hostname(host_header)
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        if "." in host and not host.endswith(_LOCAL_SUFFIXES):
+            return False
+    origin = headers.get("origin")
+    if origin and origin != "null":
+        return urlsplit(origin).netloc.lower() == host_header.lower()
+    return True
+
+
 class AccessMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, settings: Settings) -> None:
         super().__init__(app)
@@ -69,20 +103,22 @@ class AccessMiddleware(BaseHTTPMiddleware):
         self.token = settings.conduit_api_token
 
     async def dispatch(self, request: Request, call_next):
-        if self.mode == "none" or request.url.path in OPEN_PATHS:
+        if self.mode == "none":
+            request.state.authorized = True
             return await call_next(request)
 
         client_host = request.client.host if request.client else None
-        lan_ok = is_private_address(client_host)
-        token_ok = _token_matches(_presented_token(request), self.token)
-
-        allowed = {
-            "lan": lan_ok,
-            "token": token_ok,
-            "both": lan_ok and token_ok,
-        }.get(self.mode, lan_ok)
-
-        if not allowed:
+        if request.url.path in OPEN_PATHS:
+            # Reachable by anyone; the handler shows details only to callers
+            # who would have passed the normal check.
+            request.state.authorized = self._allowed(request, client_host)
+            return await call_next(request)
+        if self.mode == "lan" and not host_allowed(request.headers):
+            log.warning("request rejected: foreign host or origin",
+                        extra={"host": request.headers.get("host"),
+                               "origin": request.headers.get("origin")})
+            return JSONResponse({"detail": "Access denied."}, status_code=403)
+        if not self._allowed(request, client_host):
             log.warning(
                 "request rejected",
                 extra={"client": client_host, "path": request.url.path, "mode": self.mode},
@@ -91,13 +127,30 @@ class AccessMiddleware(BaseHTTPMiddleware):
                 {"detail": "Access denied. rás only accepts local-network requests."},
                 status_code=403,
             )
+        request.state.authorized = True
         return await call_next(request)
 
+    def _allowed(self, request: Request, client_host: str | None) -> bool:
+        if self.mode == "lan" and not host_allowed(request.headers):
+            return False
+        lan_ok = is_private_address(client_host)
+        token_ok = _token_matches(_presented_token(request), self.token)
+        return {
+            "lan": lan_ok,
+            "token": token_ok,
+            "both": lan_ok and token_ok,
+        }.get(self.mode, lan_ok)
 
-def websocket_allowed(settings: Settings, host: str | None, token: str) -> bool:
+
+def websocket_allowed(
+    settings: Settings, host: str | None, token: str, headers=None
+) -> bool:
     """WebSockets bypass HTTP middleware in Starlette, so they check here."""
     if settings.conduit_auth_mode == "none":
         return True
+    if (settings.conduit_auth_mode == "lan" and headers is not None
+            and not host_allowed(headers)):
+        return False
     lan_ok = is_private_address(host)
     token_ok = _token_matches(token, settings.conduit_api_token)
     return {

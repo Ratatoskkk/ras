@@ -18,6 +18,7 @@ from ..clients.qbittorrent import BUSY_STATES
 from ..domain.models import DownloadState, EventLevel, Release
 from ..logs import get_logger
 from ..util import bencode
+from ..util.resilience import CircuitOpen, TransientError
 from ..util.text import human_size
 from . import storage
 from .context import Conduit
@@ -72,6 +73,13 @@ async def _dispatch_queue(ctx: Conduit) -> dict[str, int]:
             if await _dispatch_one(ctx, row, drives, existing_hashes):
                 sent += 1
                 slots -= 1
+        except (TransientError, CircuitOpen) as exc:
+            # The tracker or the client is briefly unavailable. Failing the row
+            # would strand its wants until someone clicks Retry; leave it queued
+            # for the next tick, and stop -- the rest would hit the same outage.
+            log.warning("dispatch deferred", extra={"title": row["display_title"],
+                                                    "err": str(exc)})
+            break
         except Exception as exc:
             log.exception("dispatch failed", extra={"title": row["display_title"]})
             await ctx.repos.downloads.set_state(
@@ -252,6 +260,8 @@ async def _fetch_torrent(
     )
     try:
         content = await ctx.indexers.fetch_torrent(release)
+    except (TransientError, CircuitOpen):
+        raise
     except Exception as exc:
         raise RuntimeError("could not fetch .torrent; retry when the tracker is available") from exc
 

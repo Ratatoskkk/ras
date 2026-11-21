@@ -32,7 +32,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     host = websocket.client.host if websocket.client else None
     token = websocket.query_params.get("token", "")
 
-    if not websocket_allowed(ctx.settings, host, token):
+    if not websocket_allowed(ctx.settings, host, token, getattr(websocket, "headers", None)):
         await websocket.close(code=4403, reason="Access denied")
         return
 

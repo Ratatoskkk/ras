@@ -16,6 +16,8 @@ const FILTERS = [
 let filter = 'all';
 let query = '';
 let history = null;
+// History is cached, so refetch it whenever a download finishes or fails.
+let historyMark = '';
 
 export default {
   id: 'queue',
@@ -24,6 +26,11 @@ export default {
   badge: () => (store.summary.downloading || 0) + (store.summary.queued || 0),
 
   render(root) {
+    const mark = `${store.summary.completed ?? 0}:${store.summary.failed ?? 0}`;
+    if (mark !== historyMark) {
+      historyMark = mark;
+      history = null;
+    }
     const items = visible();
     setHTML(root, html`
       <div class="filters">

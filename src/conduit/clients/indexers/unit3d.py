@@ -302,5 +302,6 @@ def _release_from_cache(indexer: str, attrs: dict[str, Any], bonus: int) -> Rele
         uploaded_at=attrs.get("created_at"),
         indexer_score_bonus=bonus,
         raw={"poster": meta.get("poster"), "uploader": attrs.get("uploader"),
-             "num_file": attrs.get("num_file")},
+             "num_file": attrs.get("num_file"),
+             "release_year": attrs.get("release_year") or meta.get("release_year")},
     )

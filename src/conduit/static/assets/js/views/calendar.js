@@ -143,7 +143,8 @@ export default {
     if (action === 'seen-through') {
       const season = Number(target.dataset.season);
       const episode = Number(target.dataset.episode);
-      if (!season) {
+      // Season 0 (specials) is a real season; only a missing one is not.
+      if (target.dataset.season === '' || Number.isNaN(season)) {
         toast('That item has no season to work back through', 'err');
         return true;
       }
@@ -335,7 +336,7 @@ function airingRow(item) {
             Seen
           </button>
           ${moreMenu(item.title, [
-            item.season
+            item.season != null
               ? html`<button class="btn btn--sm btn--ghost" data-action="seen-through" data-id="${item.media_id}"
                              data-season="${item.season}" data-episode="${item.episode ?? ''}">
                        Seen through ${code}

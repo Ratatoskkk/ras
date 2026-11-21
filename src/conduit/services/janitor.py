@@ -168,9 +168,13 @@ async def cleanup_candidates(ctx: Conduit) -> list[dict[str, Any]]:
 
 async def remove_download(
     ctx: Conduit, download_id: int, *, delete_files: bool = True,
-    respect_seed_goal: bool = False,
+    respect_seed_goal: bool = False, reopen_wants: bool = True,
 ) -> dict[str, Any]:
     """Remove a download from the client (optionally with its files) and archive it.
+
+    Removing one that never completed hands its wants back to the search --
+    as a denial does -- instead of leaving them claimed by a row that no
+    longer exists. ``reopen_wants`` is off when a season pack replaces it.
 
     ``respect_seed_goal`` refuses the delete while the tracker's seeding
     requirement is unmet. The reclaim UI sets it; an explicit removal from the
@@ -179,13 +183,13 @@ async def remove_download(
     async with ctx.queue_dispatch_lock:
         return await _remove_download(
             ctx, download_id, delete_files=delete_files,
-            respect_seed_goal=respect_seed_goal,
+            respect_seed_goal=respect_seed_goal, reopen_wants=reopen_wants,
         )
 
 
 async def _remove_download(
     ctx: Conduit, download_id: int, *, delete_files: bool,
-    respect_seed_goal: bool,
+    respect_seed_goal: bool, reopen_wants: bool,
 ) -> dict[str, Any]:
     row = await ctx.repos.downloads.get(download_id)
     if not row:
@@ -227,6 +231,12 @@ async def _remove_download(
             removed = True
 
     await ctx.repos.downloads.archive(download_id)
+    if reopen_wants and row["state"] != DownloadState.COMPLETED:
+        reopened = await ctx.repos.wanted.reopen_for_download(
+            download_id, row.get("wanted_id")
+        )
+        if reopened:
+            ctx.bus.publish("calendar.refreshed", changed=reopened)
     await ctx.record(
         "cleanup",
         f"Removed {row['display_title']}"
@@ -295,6 +305,11 @@ async def retire_superseded_episodes(
     seasons = {season} if isinstance(season, int) else season
     if not seasons:
         return 0
+    # Only episodes grabbed before the pack finished can be in it. Singles
+    # grabbed later -- the rest of a season the pack caught part-way through
+    # -- are episodes it never had.
+    pack = await ctx.repos.downloads.get(keep_download_id)
+    pack_done = (pack or {}).get("completed_at")
     rows = await ctx.repos.downloads.list_by_state(
         DownloadState.DOWNLOADING, DownloadState.QUEUED,
         DownloadState.PENDING_APPROVAL, DownloadState.NO_SPACE,
@@ -307,6 +322,7 @@ async def retire_superseded_episodes(
         and row.get("media_id") == media_id
         and row.get("season") in seasons
         and not row.get("is_season_pack")
+        and (not pack_done or str(row.get("created_at") or "") <= str(pack_done))
     ]
     if not victims:
         return 0
@@ -314,7 +330,8 @@ async def retire_superseded_episodes(
     retired = 0
     for row in victims:
         result = await remove_download(
-            ctx, int(row["id"]), delete_files=True, respect_seed_goal=True
+            ctx, int(row["id"]), delete_files=True, respect_seed_goal=True,
+            reopen_wants=False,
         )
         if result["ok"]:
             retired += 1

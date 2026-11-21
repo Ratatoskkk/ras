@@ -8,6 +8,7 @@ removes the thread-local connection juggling the reference project needed.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 from collections.abc import AsyncIterator, Iterable, Sequence
@@ -31,6 +32,7 @@ class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._conn: aiosqlite.Connection | None = None
+        self._tx_lock = asyncio.Lock()
 
     # -- lifecycle ----------------------------------------------------------
     async def connect(self) -> None:
@@ -132,15 +134,23 @@ class Database:
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[aiosqlite.Connection]:
-        """Explicit transaction. Nested use is not supported (and not needed)."""
-        await self.conn.execute("BEGIN IMMEDIATE")
-        try:
-            yield self.conn
-        except Exception:
-            await self.conn.execute("ROLLBACK")
-            raise
-        else:
-            await self.conn.execute("COMMIT")
+        """Explicit transaction. Nested use is not supported (and not needed).
+
+        The lock keeps two coroutines from issuing ``BEGIN`` on the shared
+        connection. Cancellation is a ``BaseException``, so it must roll back
+        too -- otherwise the connection stays inside an open transaction that
+        every later write silently joins and never commits.
+        """
+        async with self._tx_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self.conn
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(self.conn.execute("ROLLBACK"))
+                raise
+            else:
+                await self.conn.execute("COMMIT")
 
     # -- helpers ------------------------------------------------------------
     async def get_meta(self, key: str, default: Any = None) -> Any:

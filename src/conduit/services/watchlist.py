@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, date
 
-from ..domain.models import MediaType, WantedState
+from ..domain.models import DownloadState, MediaType, WantedState
 from ..logs import get_logger
 from ..util.text import episode_code
 from .context import Conduit
@@ -166,7 +166,14 @@ async def _want_movie(ctx: Conduit, media_id: int, tmdb_id: str | None, title: s
         media_id=media_id, season=None, episode=None, title=title,
         air_date=air_date, state=state,
     )
-    await ctx.repos.wanted.reopen_watchlisted_movie(wanted_id, state)
+    # A movie that just finished is not in the library index until Plex scans
+    # it and the next index runs. Reopening it in that gap grabbed it twice.
+    if not await ctx.db.fetch_value(
+        "SELECT 1 FROM downloads WHERE media_id = ? AND archived = 0 AND ("
+        " state IN (?, ?) OR (state = ? AND completed_at >= datetime('now', '-1 day')))",
+        (media_id, DownloadState.DOWNLOADING, DownloadState.QUEUED, DownloadState.COMPLETED),
+    ):
+        await ctx.repos.wanted.reopen_watchlisted_movie(wanted_id, state)
     when = f"expected {air_date}" if air_date else "release date unknown"
     await ctx.record("watchlist", f"Wanted: {title} ({when})", media_id=media_id)
 

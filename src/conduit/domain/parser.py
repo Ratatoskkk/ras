@@ -25,8 +25,12 @@ RE_MULTISPACE = re.compile(r"\s{2,}")
 RE_YEAR = re.compile(r"(?:^|[\s(\[])((?:19|20)\d{2})(?=[\s)\]]|$)")
 
 RE_SE = re.compile(
-    r"\bS(?P<season>\d{1,3})\s*(?:E|EP|X)(?P<ep>\d{1,4})"
-    r"(?P<extra>(?:\s*-\s*(?:E|EP)?\d{1,4}|\s*(?:E|EP)\d{1,4})*)",
+    # "X" only when glued to the season ("S01X02"): with a space allowed,
+    # "S01 x265" (a codec after a season pack) read as episode 265. A bare
+    # number after a dash must also be glued ("E01-03"): "S01E05 - 1080p"
+    # is a resolution, not the end of an episode range.
+    r"\bS(?P<season>\d{1,3})(?:\s*(?:E|EP)|X)(?P<ep>\d{1,4})"
+    r"(?P<extra>(?:\s*-\s*(?:E|EP)\d{1,4}|-\d{1,3}\b|\s*(?:E|EP)\d{1,4})*)",
     re.IGNORECASE,
 )
 RE_XFORMAT = re.compile(r"\b(?P<season>\d{1,2})x(?P<ep>\d{2,3})\b", re.IGNORECASE)
@@ -290,7 +294,13 @@ def _parse_name(original: str) -> ParsedRelease:
         for m in RE_YEAR.finditer(text)
         if m.start() > 0 and not (date_match and m.start(1) >= date_match.start())
     ]
+    # Back-to-back years ("Blade Runner 2049 2017") mean the first is part
+    # of the title; the release year is the last one in that run.
     year_match = candidates[0] if candidates else None
+    for following in candidates[1:]:
+        if text[year_match.end(1):following.start(1)].strip(" ()[]"):
+            break
+        year_match = following
     if year_match:
         parsed.year = int(year_match.group(1))
 

@@ -109,9 +109,11 @@ def watched_high_water(watched: set[tuple[int, int]]) -> tuple[int, int] | None:
     """The furthest point reached in a series, as ``(season, episode)``.
 
     Tuple ordering does the work: ``(3, 2) > (2, 99)``, so the maximum is the
-    latest episode watched, not merely the highest episode number.
+    latest episode watched, not merely the highest episode number. Specials
+    (season 0) are ignored: watching one says nothing about where you are.
     """
-    return max(watched) if watched else None
+    real = [key for key in watched if key[0] > 0]
+    return max(real) if real else None
 
 
 def plan_show_wants(

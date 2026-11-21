@@ -16,6 +16,7 @@ back without touching credentials.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from functools import lru_cache
 from pathlib import Path
@@ -316,6 +317,12 @@ class CalendarConfig(BaseModel):
     max_seasons_back: int = 0  # 0 == all seasons
 
 
+_NON_TRACKER_SECRETS = frozenset({
+    "PLEX_TOKEN", "TMDB_API_KEY", "QBITTORRENT_USERNAME", "QBITTORRENT_PASSWORD",
+    "CONDUIT_API_TOKEN",
+})
+
+
 class IndexerConfig(BaseModel):
     """A tracker definition. ``type`` selects the client implementation."""
 
@@ -337,6 +344,18 @@ class IndexerConfig(BaseModel):
     @classmethod
     def _strip_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _tracker_key_name(cls, v: str) -> str:
+        # The named variable is sent to ``base_url``. Pointing it at another
+        # service's secret would hand that secret to whatever the URL says.
+        v = v.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError("must be an environment variable name")
+        if v.upper() in _NON_TRACKER_SECRETS:
+            raise ValueError(f"{v} belongs to another service, not a tracker")
+        return v
 
 
 class NotificationConfig(BaseModel):

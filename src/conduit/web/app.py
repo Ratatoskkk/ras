@@ -69,7 +69,8 @@ def create_app(
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:
         log.exception("unhandled request error", extra={"path": request.url.path})
-        return JSONResponse({"detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        # The details (SQL, local paths) stay in the log, not the response.
+        return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
     _mount_frontend(app, static_dir)
     return app
@@ -105,10 +106,15 @@ def _mount_frontend(app: FastAPI, static_dir: Path) -> None:
         if path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API route not found")
         if path:
-            candidate = (root / path).resolve()
-            # Path containment by path segments, not by string prefix: a
-            # sibling directory called "static_something" starts with the same
-            # characters as "static" and would otherwise be served.
-            if candidate.is_relative_to(root) and candidate.is_file():
+            try:
+                candidate = (root / path).resolve()
+                # Path containment by path segments, not by string prefix: a
+                # sibling directory called "static_something" starts with the
+                # same characters as "static" and would otherwise be served.
+                servable = candidate.is_relative_to(root) and candidate.is_file()
+            except (ValueError, OSError):
+                # NUL bytes and names Windows rejects: not a file, not a 500.
+                servable = False
+            if servable:
                 return FileResponse(candidate, headers=headers)
         return FileResponse(index, headers=headers)

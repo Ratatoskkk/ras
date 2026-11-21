@@ -716,6 +716,10 @@ class DownloadRepo(BaseRepo):
             stamps = ", grabbed_at = COALESCE(grabbed_at, datetime('now'))"
         elif state == DownloadState.COMPLETED:
             stamps = ", completed_at = datetime('now'), progress = 1.0, eta_seconds = 0"
+        elif state == DownloadState.QUEUED:
+            # A retried download starts a fresh life: an old missing_since
+            # would let the monitor cancel it the first time it blinks.
+            stamps = ", missing_since = NULL"
         await self.db.execute(
             f"""UPDATE downloads SET state = ?, error = ?,
                     save_path = COALESCE(?, save_path),
@@ -916,16 +920,26 @@ class LibraryRepo(BaseRepo):
     """Cached view of the Plex library."""
 
     async def replace_all(self, items: list[LibraryItem]) -> int:
-        """Swap the whole index atomically -- no half-updated state is visible."""
+        """Swap the whole index in one transaction.
+
+        Every coroutine shares this connection, so readers see the transaction
+        in progress. Upserting first and pruning stale rows last means they see
+        the old index, the new one, or both -- never an empty library, which
+        would make the calendar want every episode it already owns.
+        """
         async with self.db.transaction() as conn:
-            await conn.execute("DELETE FROM library_items")
             await conn.executemany(
                 """INSERT INTO library_items
                      (kind, rating_key, tmdb_id, show_tmdb_id, title, season, episode,
                       watched, view_count, resolution, file_path, size_bytes, added_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT (rating_key) DO UPDATE SET
+                     kind = excluded.kind, tmdb_id = excluded.tmdb_id,
+                     show_tmdb_id = excluded.show_tmdb_id, title = excluded.title,
+                     season = excluded.season, episode = excluded.episode,
                      watched = excluded.watched, view_count = excluded.view_count,
+                     resolution = excluded.resolution, file_path = excluded.file_path,
+                     size_bytes = excluded.size_bytes, added_at = excluded.added_at,
                      updated_at = datetime('now')""",
                 [
                     (i.kind, i.rating_key, i.tmdb_id, i.show_tmdb_id, i.title, i.season,
@@ -934,6 +948,19 @@ class LibraryRepo(BaseRepo):
                     for i in items
                 ],
             )
+            await conn.execute(
+                "CREATE TEMP TABLE IF NOT EXISTS library_live_keys (rating_key TEXT PRIMARY KEY)"
+            )
+            await conn.execute("DELETE FROM library_live_keys")
+            await conn.executemany(
+                "INSERT OR IGNORE INTO library_live_keys (rating_key) VALUES (?)",
+                [(i.rating_key,) for i in items],
+            )
+            await conn.execute(
+                "DELETE FROM library_items "
+                "WHERE rating_key NOT IN (SELECT rating_key FROM library_live_keys)"
+            )
+            await conn.execute("DELETE FROM library_live_keys")
         return len(items)
 
     async def have_episodes(self, show_tmdb_id: str) -> set[tuple[int, int]]:

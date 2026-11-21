@@ -249,20 +249,26 @@ async def _search_media(
         want_lookup = {
             (r.get("season"), r.get("episode")): r for r in rows
         }
-        if missing:
-            targets = decisions.plan_grab_targets(
+        targets = (
+            decisions.plan_grab_targets(
                 missing, ctx.config.policy, season_sizes=season_sizes
             )
-        else:
-            targets = [
-                decisions.GrabTarget(
-                    season=r.get("season"), episode=None,
-                    episode_count=season_sizes.get(r.get("season"), 1),
-                    label=f"Season {r.get('season')}",
-                )
-                for r in rows
-                if r.get("season") is not None
-            ]
+            if missing else []
+        )
+        # A season-level want (no episode list known) needs its own pack
+        # target -- even beside episode wants for other seasons, which
+        # otherwise left it searching forever without ever being searched.
+        planned = {t.season for t in targets if t.episode is None}
+        for r in rows:
+            season = r.get("season")
+            if season is None or r.get("episode") is not None or season in planned:
+                continue
+            planned.add(season)
+            targets.append(decisions.GrabTarget(
+                season=season, episode=None,
+                episode_count=season_sizes.get(season, 1),
+                label=f"Season {season}",
+            ))
 
     distinct_seasons = len({t.season for t in targets if t.season is not None})
     grabbed = 0

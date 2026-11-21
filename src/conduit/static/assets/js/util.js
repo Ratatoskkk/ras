@@ -64,9 +64,11 @@ export function speed(bps) {
 export function duration(seconds) {
   const n = Number(seconds);
   if (!Number.isFinite(n) || n < 0) return '∞';
-  if (n < 60) return `${Math.round(n)}s`;
-  const m = Math.floor(n / 60);
-  if (m < 60) return `${m}m ${String(Math.round(n % 60)).padStart(2, '0')}s`;
+  // Round once, up front: rounding the remainder alone turned 119.6s into "1m 60s".
+  const whole = Math.round(n);
+  if (whole < 60) return `${whole}s`;
+  const m = Math.floor(whole / 60);
+  if (m < 60) return `${m}m ${String(whole % 60).padStart(2, '0')}s`;
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ${String(m % 60).padStart(2, '0')}m`;
   return `${Math.floor(h / 24)}d ${String(h % 24).padStart(2, '0')}h`;
@@ -138,6 +140,8 @@ export function countdown(isoDate) {
   const target = new Date(`${String(isoDate).slice(0, 10)}T00:00:00`);
   if (Number.isNaN(target.getTime())) return { text: 'TBA', past: true };
   const delta = (target - Date.now()) / 1000;
+  // Airing today is still coming up, not part of the backlog.
+  if (delta <= 0 && delta > -86400) return { text: 'today', past: false };
   if (delta <= 0) return { text: 'aired', past: true };
   if (delta < 86400) return { text: duration(delta), past: false };
   return { text: `${Math.ceil(delta / 86400)}d`, past: false };

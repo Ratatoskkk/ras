@@ -7,6 +7,11 @@ let config = null;
 let paths = null;
 let authMode = '';
 let dirty = false;
+// The server says the config changed. Refetch on the next render instead of
+// dropping it from under a page that is still on screen.
+let stale = false;
+// Fields whose current text cannot be saved (bad JSON, a half-typed number).
+const invalid = new Set();
 
 // Field metadata: [key, label, type, hint]
 const POLICY_FIELDS = [
@@ -78,7 +83,9 @@ export default {
   badge: () => null,
 
   async render(root) {
-    if (!config) {
+    if (!config || (stale && !dirty)) {
+      stale = false;
+      invalid.clear();
       setHTML(root, card('Settings', emptyState('…', 'Loading…')));
       try {
         const payload = await api.config();
@@ -95,6 +102,10 @@ export default {
 
   async onAction(action, target, root) {
     if (action === 'save') {
+      if (invalid.size) {
+        toast('Fix the highlighted fields before saving', 'err');
+        return true;
+      }
       target.disabled = true;
       try {
         const payload = await api.saveConfig(config);
@@ -158,15 +169,19 @@ export default {
   },
 
   onInput(action, target) {
-    if (action !== 'field') return false;
+    if (action !== 'field' || !config) return false;
     const path = target.dataset.field;
     dirty = true;
+    const banner = document.querySelector('#save-hint');
+    if (banner) banner.hidden = false;
 
     if (path === 'profiles_json') {
       try {
         config.profiles = JSON.parse(target.value);
+        invalid.delete(path);
         target.style.borderColor = '';
       } catch {
+        invalid.add(path);
         target.style.borderColor = 'var(--err)';
       }
       return true;
@@ -174,20 +189,26 @@ export default {
 
     let value;
     if (target.type === 'checkbox') value = target.checked;
-    else if (target.type === 'number') value = Number(target.value);
-    else value = target.value;
+    else if (target.type === 'number') {
+      // An emptied or half-typed field would save as 0 or null.
+      value = target.value.trim() === '' ? NaN : Number(target.value);
+      if (Number.isNaN(value)) {
+        invalid.add(path);
+        target.style.borderColor = 'var(--err)';
+        return true;
+      }
+      invalid.delete(path);
+      target.style.borderColor = '';
+    } else value = target.value;
 
     const segments = path.split('.');
     let node = config;
     for (const key of segments.slice(0, -1)) node = node[key];
     node[segments.at(-1)] = value;
-
-    const banner = document.querySelector('#save-hint');
-    if (banner) banner.hidden = false;
     return true;
   },
 
-  invalidate() { config = null; dirty = false; },
+  invalidate() { stale = true; },
 };
 
 function paint(root) {

@@ -10,7 +10,7 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..__init__ import __version__
 from ..config import AppConfig
@@ -57,8 +57,12 @@ async def get_health(request: Request) -> dict[str, Any]:
     ]
     degraded += [i["name"] for i in health["indexers"] if i.get("state") == "open"]
     degraded += [p["name"] for p in health["plex"] if p.get("state") == "open"]
+    status = "degraded" if degraded else "ok"
+    if not getattr(request.state, "authorized", True):
+        # Open to monitors, but service names and paths are not theirs to see.
+        return {"status": status, "version": __version__}
     return {
-        "status": "degraded" if degraded else "ok",
+        "status": status,
         "version": __version__,
         "degraded": degraded,
         "checks": health,
@@ -150,7 +154,7 @@ async def toggle_task(request: Request, name: str, enabled: bool = Body(embed=Tr
 # Downloads
 # ---------------------------------------------------------------------------
 class IdList(BaseModel):
-    ids: list[int]
+    ids: list[int] = Field(max_length=500)
 
 
 @router.get("/downloads/{download_id}")
@@ -301,17 +305,24 @@ async def patch_media(request: Request, media_id: int, payload: MediaPatch) -> d
     row = await ctx.repos.media.get(media_id)
     if not row:
         raise HTTPException(404, "Not found")
+    if payload.profile and payload.profile not in {p.name for p in ctx.config.profiles}:
+        raise HTTPException(422, f"Unknown profile: {payload.profile}")
+    ignored = payload.ignored
+    # Following an ignored title has to un-ignore it: the search skips ignored
+    # titles, so its wants would read "searching" while nothing happens.
+    if payload.monitored and ignored is None and row.get("ignored"):
+        ignored = False
     await ctx.repos.media.set_flags(
-        media_id, monitored=payload.monitored, ignored=payload.ignored,
+        media_id, monitored=payload.monitored, ignored=ignored,
         profile=payload.profile,
     )
-    if payload.ignored:
+    if ignored:
         await ctx.repos.wanted.set_state_for_media(
             media_id, WantedState.IGNORED,
             only_states=(WantedState.WAITING, WantedState.SEARCHING),
         )
         await ctx.record("monitor", f"Stopped following {row['title']}", media_id=media_id)
-    elif payload.ignored is False or payload.monitored:
+    elif ignored is False or (payload.monitored and not row.get("ignored")):
         await ctx.repos.wanted.set_state_for_media(
             media_id, WantedState.SEARCHING, only_states=(WantedState.IGNORED,)
         )
